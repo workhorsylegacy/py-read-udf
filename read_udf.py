@@ -1,17 +1,41 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 
-# A module for reading DVD ISOs with Python 2 & 3
+# Copyright (c) 2015, Matthew Brennan Jones <matthew.brennan.jones@gmail.com>
+# A module for reading DVD ISOs (Universal Disk Format) with Python 2 & 3
 # See Universal Disk Format (ISO/IEC 13346 and ECMA-167) for details
 # http://www.ecma-international.org/publications/files/ECMA-TR/TR-071.pdf
 # http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 # http://www.osta.org/specs/pdf/udf260.pdf
 # http://en.wikipedia.org/wiki/Universal_Disk_Format
+# See Universal Disk Format (ISO/IEC 13346 and ECMA-167) for details
+# It uses a MIT style license
+# It is hosted at: https://github.com/workhorsy/py-read-udf2
+# 
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software and associated documentation files (the
+# "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish,
+# distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so, subject to
+# the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included
+# in all copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+# IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+# CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+# TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 
 import sys, os
 
 HEADER_SIZE = 1024 * 32
-SECTOR_SIZE = 1024 * 2 # This should not be hard coded
+SECTOR_SIZE = 1024 * 2 # FIXME: This should not be hard coded
 
 def to_int(byte):
 	import struct
@@ -31,7 +55,7 @@ def to_uint32(buffer, offset):
 
 
 class TagIdentifier(object): # enum
-	none = 0
+	unknown = 0
 	PrimaryVolumeDescriptor = 1
 	AnchorVolumeDescriptorPointer = 2
 	ImplementationUseVolumeDescriptor = 4
@@ -108,7 +132,7 @@ class PrimaryVolumeDescriptor(object):
 			self._is_valid = False
 			return
 
-		self.volume_descriptor_type = int(buffer[0])
+		self.volume_descriptor_type = to_int(buffer[0])
 		self.standard_identifier = buffer[1 : 6]
 		#print(self.standard_identifier)
 		self.volume_descriptor_version = buffer[6 : 7]
@@ -138,7 +162,7 @@ class PrimaryVolumeDescriptor(object):
 		self.volume_modification_date_and_time = buffer[830 : 847]
 		self.volume_expiration_date_and_time = buffer[847 : 864]
 		self.volume_effective_date_and_time = buffer[864 : 881]
-		self.file_structure_version = int(buffer[881])
+		self.file_structure_version = to_int(buffer[881])
 		self.reserved_01 = buffer[882 : 883]
 		self.application_use = buffer[883 : 1395]
 		self.reserved_02 = buffer[1395 : 2048]
@@ -192,36 +216,33 @@ def is_valid_udf(file, file_size):
 	return has_found_marker
 
 def get_sector_size(file, file_size):
-	sizes = [2048, 512, 4096, 1024]
+	sizes = [4096, 2048, 1024, 512]
 	for size in sizes:
 		# Skip this size if the file is too small for all the sectors
 		if file_size < 257 * size:
 			continue
 
-		# Move to the last logical sector
+		# Move to the last sector
 		file.seek(256 * size)
 
 		# Read the Descriptor Tag
-		buffer = file.read(512)
+		buffer = file.read(16)
 		tag = DescriptorTag(buffer)
 
-		# Skip if not valid
+		# Skip if the tag is not valid
 		if not tag.is_valid:
 			continue
 
-		#print(tag.descriptor_tag)
-		'''
-		print(tag.descriptor_version)
-		print(tag.tag_check_sum)
-		print(tag.tag_serial_number)
-		print(tag.descriptor_crc)
-		print(tag.descriptor_crc_length)
-		print(tag.tag_location)
-		'''
+		# Skip if the tag thinks it is at the wrong sector
+		if not tag.tag_location == 256:
+			continue
 
-		# If the last sector is an Anchor Volume Descriptor Pointer, the sector size matches
-		if tag.descriptor_tag == TagIdentifier.AnchorVolumeDescriptorPointer and tag.tag_location == 256:
-			return size
+		# Skip if the sector is not an Anchor Volume Description Pointer
+		if not tag.descriptor_tag == TagIdentifier.AnchorVolumeDescriptorPointer:
+			continue
+
+		# Got the correct size
+		return size
 
 	return 0
 
@@ -241,42 +262,35 @@ def go(file, file_size, sector_size):
 		if not tag.is_valid:
 			continue
 
-		print(tag.descriptor_tag)
-		'''
-		print(tag.descriptor_version)
-		print(tag.tag_check_sum)
-		print(tag.tag_serial_number)
-		print(tag.descriptor_crc)
-		print(tag.descriptor_crc_length)
-		'''
-		if tag.descriptor_tag == TagIdentifier.AnchorVolumeDescriptorPointer:
-			AnchorVolumeDescriptorPointer(buffer)
-		#elif tag.descriptor_tag == TagIdentifier.
-		
-		
-		# Read the Descriptor Tag
-		anchor_volume_descriptor_pointer = buffer[0 : 16]
-		main_volume_descriptor_squence_extent = buffer[16 : 24]
-		reserve_volume_descriptor_squence_extent = buffer[16 : 24]
-		
-		# FIXME: Get these for the main and reserve
-		'''
-		avdp contains main and reserve volume descriptors
-		Primary
-		Volume Descriptor
-		Implementation Use Volume Descriptor
-		Partition Descriptor
-		Logical Volume Descriptor
-		Unallocated Space Descriptor
-		Terminating Descriptor
-		'''
+		if tag.descriptor_tag == TagIdentifier.PrimaryVolumeDescriptor:
+			print(sector, 'PrimaryVolumeDescriptor')
+			PrimaryVolumeDescriptor(buffer)
+		elif tag.descriptor_tag == TagIdentifier.AnchorVolumeDescriptorPointer:
+			print(sector, 'AnchorVolumeDescriptorPointer')
+			anchor = AnchorVolumeDescriptorPointer(buffer)
+		elif tag.descriptor_tag == TagIdentifier.ImplementationUseVolumeDescriptor:
+			print(sector, 'ImplementationUseVolumeDescriptor')
+			pass #ImplementationUseVolumeDescriptor(buffer)
+		elif tag.descriptor_tag == TagIdentifier.PartitionDescriptor:
+			print(sector, 'PartitionDescriptor')
+			pass #PartitionDescriptor(buffer)
+		elif tag.descriptor_tag == TagIdentifier.LogicalVolumeDescriptor:
+			print(sector, 'LogicalVolumeDescriptor')
+			pass #LogicalVolumeDescriptor(buffer)
+		elif tag.descriptor_tag == TagIdentifier.UnallocatedSpaceDescriptor:
+			print(sector, 'UnallocatedSpaceDescriptor')
+			pass #UnallocatedSpaceDescriptor(buffer)
+		elif tag.descriptor_tag == TagIdentifier.TerminatingDescriptor:
+			print(sector, 'TerminatingDescriptor')
+			pass #TerminatingDescriptor(buffer)
 	
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
 file_size = os.path.getsize(game_file)
 f = open(game_file, 'rb')
 print('is_valid_udf', is_valid_udf(f, file_size))
-print('get_sector_size', get_sector_size(f, file_size))
-go(f, file_size, 2048)
+sector_size = get_sector_size(f, file_size)
+print('sector_size', sector_size)
+go(f, file_size, sector_size)
 
 
