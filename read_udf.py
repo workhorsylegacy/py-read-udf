@@ -53,14 +53,51 @@ def to_uint32(buffer, start = 0):
 	return(a | b | c | d)
 
 
-class ApplicationIdentifier(object):
-	def __init__(self, buffer, start):
-		self._is_valid = True
+class BaseTag(object):
+	def __init__(self, size, buffer, start):
+		self._size = size
 
-		# Make sure there is enough space
-		if len(buffer) - start < 32:
-			self._is_valid = False
-			return
+		self._assert_size(buffer, start)
+
+	def get_size(self):
+		return self._size
+	size = property(get_size)
+
+	# Make sure there is enough space
+	def _assert_size(self, buffer, start):
+		if len(buffer) - start < self._size:
+			raise Exception("{0} requires {1} bytes, but buffer only has {2}".format(type(self), self._size, len(buffer) - start))
+
+	# Make sure the checksums match
+	def _assert_checksum(self, buffer, start, expected_checksum):
+		checksum = 0
+		for i in range(16):
+			if i == 4:
+				continue
+			checksum += to_uint8(buffer[start + i])
+
+		# Truncate int to uint8
+		while checksum > 256:
+			checksum -= 256
+
+		if not checksum == expected_checksum:
+			raise Exception("Checksum was {0}, but {1} was expected".format(checksum, expected_checksum))
+
+	# Make sure it is the correct type of tag
+	def _assert_tag_identifier(self, expected_tag_identifier):
+		if not self.descriptor_tag.tag_identifier == expected_tag_identifier:
+			raise Exception("Expected Tag Identifier {0}, but was {1}".format(expected_tag_identifier, self.descriptor_tag.tag_identifier))
+
+	# Make sure the reserved space is all zeros
+	def _assert_reserve_space(self, buffer, start, length):
+		for n in buffer[start : start + length]:
+			if not to_uint8(n) == 0:
+				raise Exception("Reserve space at {0} was not zero.".format(start))
+
+
+class ApplicationIdentifier(BaseTag):
+	def __init__(self, buffer, start):
+		super(ApplicationIdentifier, self).__init__(32, buffer, start)
 
 		self.flags = to_uint8(buffer[start + 0])
 		self.identifier = buffer[start + 1 : start + 24]
@@ -83,14 +120,9 @@ class TagIdentifier(object): # enum
 
 # page 3/3 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 # page 20 of http://www.osta.org/specs/pdf/udf260.pdf
-class DescriptorTag(object):
+class DescriptorTag(BaseTag):
 	def __init__(self, buffer, start = 0):
-		self._is_valid = True
-		
-		# Make sure there is enough space
-		if len(buffer) - start < 16:
-			self._is_valid = False
-			return
+		super(DescriptorTag, self).__init__(16, buffer, start)
 
 		self.tag_identifier = to_uint16(buffer, start + 0)
 		self.descriptor_version = to_uint16(buffer, start + 2)
@@ -103,77 +135,34 @@ class DescriptorTag(object):
 
 		# Make sure the identifier is known
 		if self.tag_identifier == TagIdentifier.unknown:
-			self._is_valid = False
-			return
+			raise Exception("Tag Identifier was unknown")
 
-		# Make sure the checksum matches
-		check_sum = 0
-		for i in range(16):
-			if i == 4:
-				continue
-			check_sum += to_uint8(buffer[i])
-
-		# Truncate int to uint8
-		while check_sum > 256:
-			check_sum -= 256
-
-		if not check_sum == self.tag_check_sum:
-			self._is_valid = False
-			return
-
-		# Make sure the reserve is zeros
-		if not self.reserved == 0:
-			self._is_valid = False
-			return
-
-	def get_is_valid(self):
-		return self._is_valid
-	is_valid = property(get_is_valid)
+		self._assert_checksum(buffer, start, self.tag_check_sum)
+		self._assert_reserve_space(buffer, start + 5, 1)
 
 
 # page 3/3 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
-class ExtentDescriptor(object):
-	def __init__(self, buffer, start=0):
-		self._is_valid = True
-
-		# Make sure there is enough space
-		if len(buffer) - start < 8:
-			self._is_valid = False
-			return
+class ExtentDescriptor(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(ExtentDescriptor, self).__init__(8, buffer, start)
 
 		self.extent_length = to_uint32(buffer, start)
 		self.extent_location = to_uint32(buffer, start + 4)
 
 
 # page 3/15 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
-class AnchorVolumeDescriptorPointer(object):
-	def __init__(self, buffer):
-		self._is_valid = True
-		
-		# Make sure there is enough space
-		if len(buffer) < 512:
-			self._is_valid = False
-			return
+class AnchorVolumeDescriptorPointer(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(AnchorVolumeDescriptorPointer, self).__init__(512, buffer, start)
 
 		self.descriptor_tag = DescriptorTag(buffer)
+		self._assert_tag_identifier(TagIdentifier.AnchorVolumeDescriptorPointer)
+
 		self.main_volume_descriptor_sequence_extent = ExtentDescriptor(buffer, 16)
 		self.reserve_volume_descriptor_sequence_extent = ExtentDescriptor(buffer, 24)
 		self.reserved = buffer[32 : 512]
 
-		# Make sure it is the correct type of tag
-		if not self.descriptor_tag.tag_identifier == TagIdentifier.AnchorVolumeDescriptorPointer:
-			self._is_valid = False
-			return
-
-		# Make sure the reserved space is all zeros
-		for n in self.reserved:
-			if not to_uint8(n) == 0:
-				self._is_valid = False
-				return
-
-	def get_is_valid(self):
-		return self._is_valid
-	is_valid = property(get_is_valid)
+		self._assert_reserve_space(buffer, start + 32, 480)
 
 
 # page 12 of http://www.osta.org/specs/pdf/udf260.pdf
@@ -187,16 +176,13 @@ def to_dstring(buffer, start, max_length):
 
 
 # page 3/12 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
-class PrimaryVolumeDescriptor(object):
-	def __init__(self, buffer):
-		self._is_valid = True
-
-		# Make sure there is enough space
-		if len(buffer) < 512:
-			self._is_valid = False
-			return
+class PrimaryVolumeDescriptor(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(PrimaryVolumeDescriptor, self).__init__(512, buffer, start)
 
 		self.descriptor_tag = DescriptorTag(buffer)
+		self._assert_tag_identifier(TagIdentifier.PrimaryVolumeDescriptor)
+
 		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
 		self.primary_volume_descriptor_number = to_uint32(buffer, 20)
 		self.volume_identifier = to_dstring(buffer, 24, 32)
@@ -219,33 +205,17 @@ class PrimaryVolumeDescriptor(object):
 		self.flags = to_uint16(buffer, 488)
 		self.reserved = buffer[490 : 512]
 
-		# Make sure it is the correct type of tag
-		if not self.descriptor_tag.tag_identifier == TagIdentifier.PrimaryVolumeDescriptor:
-			self._is_valid = False
-			return
-
-		# Make sure the reserved space is all zeros
-		for n in self.reserved:
-			if not to_uint8(n) == 0:
-				self._is_valid = False
-				return
-
-	def get_is_valid(self):
-		return self._is_valid
-	is_valid = property(get_is_valid)
+		self._assert_reserve_space(buffer, start + 490, 22)
 
 
 # page 3/17 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
-class PartitionDescriptor(object):
-	def __init__(self, buffer):
-		self._is_valid = True
-
-		# Make sure there is enough space
-		if len(buffer) < 512:
-			self._is_valid = False
-			return
+class PartitionDescriptor(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(PartitionDescriptor, self).__init__(512, buffer, start)
 
 		self.descriptor_tag = DescriptorTag(buffer)
+		self._assert_tag_identifier(TagIdentifier.PartitionDescriptor)
+
 		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
 		self.partition_flags = to_uint16(buffer, 20)
 		self.partition_number = to_uint16(buffer, 22)
@@ -258,33 +228,17 @@ class PartitionDescriptor(object):
 		self.implementation_use = buffer[228 : 356]
 		self.reserved = buffer[356 : 512]
 
-		# Make sure it is the correct type of tag
-		if not self.descriptor_tag.tag_identifier == TagIdentifier.PartitionDescriptor:
-			self._is_valid = False
-			return
-
-		# Make sure the reserved space is all zeros
-		for n in self.reserved:
-			if not to_uint8(n) == 0:
-				self._is_valid = False
-				return
-
-	def get_is_valid(self):
-		return self._is_valid
-	is_valid = property(get_is_valid)
+		self._assert_reserve_space(buffer, start + 356, 156)
 
 
 # page 3/19 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
-class LogicalVolumeDescriptor(object):
-	def __init__(self, buffer):
-		self._is_valid = True
-
-		# Make sure there is enough space
-		if len(buffer) < 512:
-			self._is_valid = False
-			return
+class LogicalVolumeDescriptor(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(LogicalVolumeDescriptor, self).__init__(512, buffer, start)
 
 		self.descriptor_tag = DescriptorTag(buffer)
+		self._assert_tag_identifier(TagIdentifier.LogicalVolumeDescriptor)
+
 		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
 		self.descriptor_character_set = buffer[20 : 84] # FIXME: charspec
 		self.logical_volume_identifier = to_dstring(buffer, 84, 128)
@@ -297,15 +251,6 @@ class LogicalVolumeDescriptor(object):
 		self.implementation_use = buffer[304 : 432]
 		self.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
 		self.partition_maps = buffer[440 : 440 + (self.map_table_length * self.number_of_partition_maps)]
-
-		# Make sure it is the correct type of tag
-		if not self.descriptor_tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
-			self._is_valid = False
-			return
-
-	def get_is_valid(self):
-		return self._is_valid
-	is_valid = property(get_is_valid)
 
 
 # FIXME: This assumes the sector size is 2048
@@ -361,10 +306,11 @@ def get_sector_size(file, file_size):
 
 		# Read the Descriptor Tag
 		buffer = file.read(16)
-		tag = DescriptorTag(buffer)
-
+		tag = None
+		try:
+			tag = DescriptorTag(buffer)
 		# Skip if the tag is not valid
-		if not tag.is_valid:
+		except:
 			continue
 
 		# Skip if the tag thinks it is at the wrong sector
@@ -378,7 +324,7 @@ def get_sector_size(file, file_size):
 		# Got the correct size
 		return size
 
-	return 0
+	raise Exception("Could not get sector size.")
 
 def go(file, file_size, sector_size):
 	if file_size < 257 * sector_size:
@@ -405,10 +351,12 @@ def go(file, file_size, sector_size):
 
 		# Read the Descriptor Tag
 		buffer = file.read(16)
-		tag = DescriptorTag(buffer)
+		tag = None
 
 		# Skip if not valid
-		if not tag.is_valid:
+		try:
+			tag = DescriptorTag(buffer)
+		except:
 			continue
 
 		# Move back to the start of the sector
