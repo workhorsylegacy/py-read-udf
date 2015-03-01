@@ -40,20 +40,35 @@ def to_uint8(byte):
 	import struct
 	return struct.unpack('B', byte)[0]
 
-def to_uint16(buffer, offset):
-	left = ((to_uint8(buffer[offset + 1]) << 8) & 0xFF00)
-	right = ((to_uint8(buffer[offset + 0]) << 0) & 0x00FF)
+def to_uint16(buffer, start = 0):
+	left = ((to_uint8(buffer[start + 1]) << 8) & 0xFF00)
+	right = ((to_uint8(buffer[start + 0]) << 0) & 0x00FF)
 	return (left | right)
 
-def to_uint32(buffer, offset):
-	a = ((to_uint8(buffer[offset + 3]) << 24) & 0xFF000000)
-	b = ((to_uint8(buffer[offset + 2]) << 16) & 0x00FF0000)
-	c = ((to_uint8(buffer[offset + 1]) << 8) & 0x0000FF00)
-	d = ((to_uint8(buffer[offset + 0]) << 0) & 0x000000FF)
+def to_uint32(buffer, start = 0):
+	a = ((to_uint8(buffer[start + 3]) << 24) & 0xFF000000)
+	b = ((to_uint8(buffer[start + 2]) << 16) & 0x00FF0000)
+	c = ((to_uint8(buffer[start + 1]) << 8) & 0x0000FF00)
+	d = ((to_uint8(buffer[start + 0]) << 0) & 0x000000FF)
 	return(a | b | c | d)
 
 
+class ApplicationIdentifier(object):
+	def __init__(self, buffer, start):
+		self._is_valid = True
 
+		# Make sure there is enough space
+		if len(buffer) - start < 32:
+			self._is_valid = False
+			return
+
+		self.flags = to_uint8(buffer[start + 0])
+		self.identifier = buffer[start + 1 : start + 24]
+		self.identifier_suffix = buffer[start + 24 : start + 32]
+
+		print('self.flags', self.flags)
+		print('self.identifier', self.identifier)
+		print('self.identifier_suffix', self.identifier_suffix)
 
 # page 3/4 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 class TagIdentifier(object): # enum
@@ -72,15 +87,13 @@ class TagIdentifier(object): # enum
 # page 3/3 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 # page 20 of http://www.osta.org/specs/pdf/udf260.pdf
 class DescriptorTag(object):
-	def __init__(self, buffer):
+	def __init__(self, buffer, start = 0):
 		self._is_valid = True
 		
-		if len(buffer) < 16:
+		# Make sure there is enough space
+		if len(buffer) - start < 16:
 			self._is_valid = False
 			return
-		
-		if to_uint16(buffer, 0) == 0:
-			self._is_valid = False
 
 		self.tag_identifier = to_uint16(buffer, 0)
 		self.descriptor_version = to_uint16(buffer, 2)
@@ -90,6 +103,11 @@ class DescriptorTag(object):
 		self.descriptor_crc = to_uint16(buffer, 8)
 		self.descriptor_crc_length = to_uint16(buffer, 10)
 		self.tag_location = to_uint32(buffer, 12)
+
+		# Make sure the identifier is known
+		if self.tag_identifier == TagIdentifier.unknown:
+			self._is_valid = False
+			return
 
 		# Make sure the checksum matches
 		check_sum = 0
@@ -116,18 +134,33 @@ class DescriptorTag(object):
 	is_valid = property(get_is_valid)
 
 
+# page 3/3 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class ExtentDescriptor(object):
+	def __init__(self, buffer, start=0):
+		self._is_valid = True
+
+		# Make sure there is enough space
+		if len(buffer) - start < 8:
+			self._is_valid = False
+			return
+
+		self.extent_length = to_uint32(buffer, start)
+		self.extent_location = to_uint32(buffer, start + 4)
+
+
 # page 3/15 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 class AnchorVolumeDescriptorPointer(object):
 	def __init__(self, buffer):
 		self._is_valid = True
 		
+		# Make sure there is enough space
 		if len(buffer) < 512:
 			self._is_valid = False
 			return
 
 		self.descriptor_tag = DescriptorTag(buffer)
-		self.main_volume_descriptor_sequence_extent = buffer[16 : 24] # FIXME: extent
-		self.reserve_volume_descriptor_sequence_extent = buffer[24 : 32] # FIXME: extent
+		self.main_volume_descriptor_sequence_extent = ExtentDescriptor(buffer, 16)
+		self.reserve_volume_descriptor_sequence_extent = ExtentDescriptor(buffer, 24)
 		self.reserved = buffer[32 : 512]
 
 		# Make sure it is the correct type of tag
@@ -151,13 +184,14 @@ class PrimaryVolumeDescriptor(object):
 	def __init__(self, buffer):
 		self._is_valid = True
 
+		# Make sure there is enough space
 		if len(buffer) < 512:
 			self._is_valid = False
 			return
 
 		self.descriptor_tag = DescriptorTag(buffer)
-		self.volume_descriptor_sequence_number = uint32(buffer, 16)
-		self.primary_volume_descriptor_number = uint32(buffer, 20)
+		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
+		self.primary_volume_descriptor_number = to_uint32(buffer, 20)
 		self.volume_identifier = buffer[24 : 56] # FIXME: d string
 		self.volume_sequence_number = to_uint16(buffer, 56)
 		self.maximum_volume_sequence_number = to_uint16(buffer, 58)
@@ -168,11 +202,11 @@ class PrimaryVolumeDescriptor(object):
 		self.volume_set_identifier = buffer[72 : 200] # FIXME: d string
 		self.descriptor_character_set = buffer[200 : 264] # FIXME: char spec
 		self.expalnatory_character_set = buffer[264 : 328] # FIXME: char spec
-		self.volume_abstract = buffer[328 : 336] # FIXME: extent
-		self.volume_copyright_notice = buffer[336 : 344] # FIXME: extent
-		self.application_identifier = buffer[344 : 376] # FIXME: regid
+		self.volume_abstract = ExtentDescriptor(buffer, 328)
+		self.volume_copyright_notice = ExtentDescriptor(buffer, 336)
+		self.application_identifier = ApplicationIdentifier(buffer, 344)
 		self.recording_date_and_time = buffer[376 : 388] # timestamp
-		self.implementation_identifier = buffer[388 : 420] # regid
+		#self.implementation_identifier = buffer[388 : 420] # regid
 		self.implementation_use = buffer[420 : 484]
 		self.predecessor_volume_descriptor_sequence_location = to_uint32(buffer, 484)
 		self.flags = to_uint16(buffer, 488)
@@ -224,7 +258,6 @@ def is_valid_udf(file, file_size):
 		'''
 		print(structure_type)
 		print(standard_identifier)
-		print(structure_version)
 		#print(structure_data)
 		'''
 
@@ -272,56 +305,77 @@ def go(file, file_size, sector_size):
 	if file_size < 257 * sector_size:
 		return
 
-	for sector in [256]:#range(257):
-		# Move to the last logical sector
+	for sector in [32]:#range(257):
+		# Move to the sector start
 		file.seek(sector * sector_size)
 
 		# Read the Descriptor Tag
-		buffer = file.read(512)
+		buffer = file.read(16)
 		tag = DescriptorTag(buffer)
 		print('file.tell()', file.tell())
 
 		# Skip if not valid
 		if not tag.is_valid:
 			continue
+
+		# Move back to the start of the sector
+		file.seek(sector * sector_size)
+		buffer = file.read(512)
 		
 		print('tag.tag_identifier', tag.tag_identifier)
 
 		if tag.tag_identifier == TagIdentifier.PrimaryVolumeDescriptor:
-			print(sector, 'PrimaryVolumeDescriptor')
-			print('tag.tag_identifier', tag.tag_identifier)
-			print('tag.descriptor_version', tag.descriptor_version)
-			print('tag.tag_check_sum', tag.tag_check_sum)
-			print('tag.reserved', tag.reserved)
-			print('tag.tag_serial_number', tag.tag_serial_number)
-			print('tag.descriptor_crc', tag.descriptor_crc)
-			print('tag.descriptor_crc_length', tag.descriptor_crc_length)
-			print('tag.tag_location', tag.tag_location)
-			PrimaryVolumeDescriptor(file.read(512))
+			desc = PrimaryVolumeDescriptor(buffer)
+			'''
+			print('desc.descriptor_tag', desc.descriptor_tag)
+			print('desc.volume_descriptor_sequence_number', desc.volume_descriptor_sequence_number)
+			print(desc.primary_volume_descriptor_number)
+			print(desc.volume_identifier)
+			print(desc.volume_sequence_number)
+			print(desc.maximum_volume_sequence_number)
+			print(desc.interchange_level)
+			print(desc.maximum_interchange_level)
+			print(desc.character_set_list)
+			print(desc.maximum_character_set_list)
+			print(desc.volume_set_identifier)
+			print(desc.descriptor_character_set)
+			print(desc.expalnatory_character_set)
+			print(desc.volume_abstract)
+			print(desc.volume_copyright_notice)
+			'''
+			print('desc.application_identifier', desc.application_identifier)
+			'''
+			print(desc.recording_date_and_time)
+			print(desc.implementation_identifier)
+			print(desc.implementation_use)
+			print(desc.predecessor_volume_descriptor_sequence_location)
+			print(desc.flags)
+			print(desc.reserved)
+			'''
 		elif tag.tag_identifier == TagIdentifier.AnchorVolumeDescriptorPointer:
 			print(sector, 'AnchorVolumeDescriptorPointer')
-			anchor = AnchorVolumeDescriptorPointer(file.read(512))
+			anchor = AnchorVolumeDescriptorPointer(buffer)
 		elif tag.tag_identifier == TagIdentifier.VolumeDescriptorPointer:
 			print(sector, 'VolumeDescriptorPointer')
-			pass #VolumeDescriptorPointer(file.read(512))
+			pass #VolumeDescriptorPointer(buffer)
 		elif tag.tag_identifier == TagIdentifier.ImplementationUseVolumeDescriptor:
 			print(sector, 'ImplementationUseVolumeDescriptor')
-			pass #ImplementationUseVolumeDescriptor(file.read(512))
+			pass #ImplementationUseVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.PartitionDescriptor:
 			print(sector, 'PartitionDescriptor')
-			pass #PartitionDescriptor(file.read(512))
+			pass #PartitionDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
 			print(sector, 'LogicalVolumeDescriptor')
-			pass #LogicalVolumeDescriptor(file.read(512))
+			pass #LogicalVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.UnallocatedSpaceDescriptor:
 			print(sector, 'UnallocatedSpaceDescriptor')
-			pass #UnallocatedSpaceDescriptor(file.read(512))
+			pass #UnallocatedSpaceDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.TerminatingDescriptor:
 			print(sector, 'TerminatingDescriptor')
-			pass #TerminatingDescriptor(file.read(512))
+			pass #TerminatingDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeIntegrityDescriptor:
 			print(sector, 'LogicalVolumeIntegrityDescriptor')
-			pass #LogicalVolumeIntegrityDescriptor(file.read(512))
+			pass #LogicalVolumeIntegrityDescriptor(buffer)
 		elif tag.tag_identifier != 0:
 			print("Unexpected Descriptor Tag :{0}".format(tag.tag_identifier))
 			
