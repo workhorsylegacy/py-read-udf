@@ -92,14 +92,14 @@ class DescriptorTag(object):
 			self._is_valid = False
 			return
 
-		self.tag_identifier = to_uint16(buffer, 0)
-		self.descriptor_version = to_uint16(buffer, 2)
-		self.tag_check_sum = to_uint8(buffer[4])
-		self.reserved = to_uint8(buffer[5])
-		self.tag_serial_number = to_uint16(buffer, 6)
-		self.descriptor_crc = to_uint16(buffer, 8)
-		self.descriptor_crc_length = to_uint16(buffer, 10)
-		self.tag_location = to_uint32(buffer, 12)
+		self.tag_identifier = to_uint16(buffer, start + 0)
+		self.descriptor_version = to_uint16(buffer, start + 2)
+		self.tag_check_sum = to_uint8(buffer[start + 4])
+		self.reserved = to_uint8(buffer[start + 5])
+		self.tag_serial_number = to_uint16(buffer, start + 6)
+		self.descriptor_crc = to_uint16(buffer, start + 8)
+		self.descriptor_crc_length = to_uint16(buffer, start + 10)
+		self.tag_location = to_uint32(buffer, start + 12)
 
 		# Make sure the identifier is known
 		if self.tag_identifier == TagIdentifier.unknown:
