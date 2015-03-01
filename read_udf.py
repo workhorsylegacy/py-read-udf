@@ -66,9 +66,6 @@ class ApplicationIdentifier(object):
 		self.identifier = buffer[start + 1 : start + 24]
 		self.identifier_suffix = buffer[start + 24 : start + 32]
 
-		print('self.flags', self.flags)
-		print('self.identifier', self.identifier)
-		print('self.identifier_suffix', self.identifier_suffix)
 
 # page 3/4 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 class TagIdentifier(object): # enum
@@ -179,6 +176,16 @@ class AnchorVolumeDescriptorPointer(object):
 	is_valid = property(get_is_valid)
 
 
+# page 12 of http://www.osta.org/specs/pdf/udf260.pdf
+# page 1/10 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+def to_dstring(buffer, start, max_length):
+	raw = buffer[start : start + max_length]
+	length = to_uint8(raw[0])
+	retval = raw[1 : 1 + length]
+	#print('dstring', retval)
+	return retval
+
+
 # page 3/12 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 class PrimaryVolumeDescriptor(object):
 	def __init__(self, buffer):
@@ -192,21 +199,21 @@ class PrimaryVolumeDescriptor(object):
 		self.descriptor_tag = DescriptorTag(buffer)
 		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
 		self.primary_volume_descriptor_number = to_uint32(buffer, 20)
-		self.volume_identifier = buffer[24 : 56] # FIXME: d string
+		self.volume_identifier = to_dstring(buffer, 24, 32)
 		self.volume_sequence_number = to_uint16(buffer, 56)
 		self.maximum_volume_sequence_number = to_uint16(buffer, 58)
 		self.interchange_level = to_uint16(buffer, 60)
 		self.maximum_interchange_level = to_uint16(buffer, 62)
 		self.character_set_list = to_uint32(buffer, 64)
 		self.maximum_character_set_list = to_uint32(buffer, 68)
-		self.volume_set_identifier = buffer[72 : 200] # FIXME: d string
+		self.volume_set_identifier = to_dstring(buffer, 72, 128)
 		self.descriptor_character_set = buffer[200 : 264] # FIXME: char spec
 		self.expalnatory_character_set = buffer[264 : 328] # FIXME: char spec
 		self.volume_abstract = ExtentDescriptor(buffer, 328)
 		self.volume_copyright_notice = ExtentDescriptor(buffer, 336)
 		self.application_identifier = ApplicationIdentifier(buffer, 344)
-		self.recording_date_and_time = buffer[376 : 388] # timestamp
-		#self.implementation_identifier = buffer[388 : 420] # regid
+		self.recording_date_and_time = buffer[376 : 388] # FIXME: timestamp
+		self.implementation_identifier = buffer[388 : 420] # FIXME: regid
 		self.implementation_use = buffer[420 : 484]
 		self.predecessor_volume_descriptor_sequence_location = to_uint32(buffer, 484)
 		self.flags = to_uint16(buffer, 488)
@@ -305,14 +312,13 @@ def go(file, file_size, sector_size):
 	if file_size < 257 * sector_size:
 		return
 
-	for sector in [32]:#range(257):
+	for sector in range(257):
 		# Move to the sector start
 		file.seek(sector * sector_size)
 
 		# Read the Descriptor Tag
 		buffer = file.read(16)
 		tag = DescriptorTag(buffer)
-		print('file.tell()', file.tell())
 
 		# Skip if not valid
 		if not tag.is_valid:
@@ -325,33 +331,8 @@ def go(file, file_size, sector_size):
 		print('tag.tag_identifier', tag.tag_identifier)
 
 		if tag.tag_identifier == TagIdentifier.PrimaryVolumeDescriptor:
+			print(sector, 'PrimaryVolumeDescriptor')
 			desc = PrimaryVolumeDescriptor(buffer)
-			'''
-			print('desc.descriptor_tag', desc.descriptor_tag)
-			print('desc.volume_descriptor_sequence_number', desc.volume_descriptor_sequence_number)
-			print(desc.primary_volume_descriptor_number)
-			print(desc.volume_identifier)
-			print(desc.volume_sequence_number)
-			print(desc.maximum_volume_sequence_number)
-			print(desc.interchange_level)
-			print(desc.maximum_interchange_level)
-			print(desc.character_set_list)
-			print(desc.maximum_character_set_list)
-			print(desc.volume_set_identifier)
-			print(desc.descriptor_character_set)
-			print(desc.expalnatory_character_set)
-			print(desc.volume_abstract)
-			print(desc.volume_copyright_notice)
-			'''
-			print('desc.application_identifier', desc.application_identifier)
-			'''
-			print(desc.recording_date_and_time)
-			print(desc.implementation_identifier)
-			print(desc.implementation_use)
-			print(desc.predecessor_volume_descriptor_sequence_location)
-			print(desc.flags)
-			print(desc.reserved)
-			'''
 		elif tag.tag_identifier == TagIdentifier.AnchorVolumeDescriptorPointer:
 			print(sector, 'AnchorVolumeDescriptorPointer')
 			anchor = AnchorVolumeDescriptorPointer(buffer)
@@ -378,8 +359,6 @@ def go(file, file_size, sector_size):
 			pass #LogicalVolumeIntegrityDescriptor(buffer)
 		elif tag.tag_identifier != 0:
 			print("Unexpected Descriptor Tag :{0}".format(tag.tag_identifier))
-			
-		print('file.tell()', file.tell())
 	
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
