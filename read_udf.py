@@ -296,21 +296,12 @@ class LogicalVolumeDescriptor(object):
 		self.implementation_identifier = buffer[272 : 304] # FIXME: regid
 		self.implementation_use = buffer[304 : 432]
 		self.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
-		self.partition_maps = buffer[440 : 440 + (self.map_table_length + self.number_of_partition_maps)]
-		print('self.map_table_length', self.map_table_length)
-		print('self.number_of_partition_maps', self.number_of_partition_maps)
-		exit()
+		self.partition_maps = buffer[440 : 440 + (self.map_table_length * self.number_of_partition_maps)]
 
 		# Make sure it is the correct type of tag
 		if not self.descriptor_tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
 			self._is_valid = False
 			return
-
-		# Make sure the reserved space is all zeros
-		for n in self.reserved:
-			if not to_uint8(n) == 0:
-				self._is_valid = False
-				return
 
 	def get_is_valid(self):
 		return self._is_valid
