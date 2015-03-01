@@ -235,6 +235,7 @@ class PrimaryVolumeDescriptor(object):
 	is_valid = property(get_is_valid)
 
 
+# FIXME: This assumes the sector size is 2048
 def is_valid_udf(file, file_size):
 	# Move to the start of the file
 	file.seek(0)
@@ -246,11 +247,11 @@ def is_valid_udf(file, file_size):
 	# Move past 32K of empty space
 	file.seek(HEADER_SIZE)
 
-	is_valid_descriptor = True
-	has_found_marker = False
+	is_valid = True
+	has_bea, has_vsd, has_tea = False, False, False
 
 	# Look at each sector
-	while(is_valid_descriptor):
+	while(is_valid):
 		# Read the next sector
 		buffer = file.read(SECTOR_SIZE)
 		if len(buffer) < SECTOR_SIZE:
@@ -260,22 +261,20 @@ def is_valid_udf(file, file_size):
 		structure_type = to_uint8(buffer[0])
 		standard_identifier = buffer[1 : 6]
 		structure_version = to_uint8(buffer[6])
-		#structure_data = buffer[7 : 2048]
-		
-		'''
-		print(structure_type)
-		print(standard_identifier)
-		#print(structure_data)
-		'''
 
-		if standard_identifier in ['NSR02', 'NSR03']:
-			has_found_marker = True
-		elif standard_identifier in ['BEA01', 'BOOT2', 'CD001', 'CDW02', 'TEA01']:
+		# Check if we have the beginning, middle, or end
+		if standard_identifier in ['BEA01']:
+			has_bea = True
+		elif standard_identifier in ['NSR02', 'NSR03']:
+			has_vsd = True
+		elif standard_identifier in ['TEA01']:
+			has_tea = True
+		elif standard_identifier in ['BOOT2', 'CD001', 'CDW02']:
 			pass
 		else:
-			is_valid_descriptor = False
+			is_valid = False
 
-	return has_found_marker
+	return has_bea and has_vsd and has_tea
 
 def get_sector_size(file, file_size):
 	sizes = [4096, 2048, 1024, 512]
