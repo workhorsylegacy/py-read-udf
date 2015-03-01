@@ -235,6 +235,88 @@ class PrimaryVolumeDescriptor(object):
 	is_valid = property(get_is_valid)
 
 
+# page 3/17 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class PartitionDescriptor(object):
+	def __init__(self, buffer):
+		self._is_valid = True
+
+		# Make sure there is enough space
+		if len(buffer) < 512:
+			self._is_valid = False
+			return
+
+		self.descriptor_tag = DescriptorTag(buffer)
+		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
+		self.partition_flags = to_uint16(buffer, 20)
+		self.partition_number = to_uint16(buffer, 22)
+		self.partition_contents = buffer[24 : 56] # FIXME regid
+		self.partition_contents_use = buffer[56 : 184]
+		self.access_type = to_uint32(buffer, 184)
+		self.partition_starting_location = to_uint32(buffer, 188)
+		self.partition_length = to_uint32(buffer, 192)
+		self.implementation_identifier = buffer[196 : 228] # FIXME: regid
+		self.implementation_use = buffer[228 : 356]
+		self.reserved = buffer[356 : 512]
+
+		# Make sure it is the correct type of tag
+		if not self.descriptor_tag.tag_identifier == TagIdentifier.PartitionDescriptor:
+			self._is_valid = False
+			return
+
+		# Make sure the reserved space is all zeros
+		for n in self.reserved:
+			if not to_uint8(n) == 0:
+				self._is_valid = False
+				return
+
+	def get_is_valid(self):
+		return self._is_valid
+	is_valid = property(get_is_valid)
+
+
+# page 3/19 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class LogicalVolumeDescriptor(object):
+	def __init__(self, buffer):
+		self._is_valid = True
+
+		# Make sure there is enough space
+		if len(buffer) < 512:
+			self._is_valid = False
+			return
+
+		self.descriptor_tag = DescriptorTag(buffer)
+		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
+		self.descriptor_character_set = buffer[20 : 84] # FIXME: charspec
+		self.logical_volume_identifier = to_dstring(buffer, 84, 128)
+		self.logical_block_size = to_uint32(buffer, 128)
+		self.domain_identifier = buffer[216 : 248] # FIXME: regid
+		self.logical_volume_centents_use = buffer[248 : 264]
+		self.map_table_length = to_uint32(buffer, 264)
+		self.number_of_partition_maps = to_uint32(buffer, 268)
+		self.implementation_identifier = buffer[272 : 304] # FIXME: regid
+		self.implementation_use = buffer[304 : 432]
+		self.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
+		self.partition_maps = buffer[440 : 440 + (self.map_table_length + self.number_of_partition_maps)]
+		print('self.map_table_length', self.map_table_length)
+		print('self.number_of_partition_maps', self.number_of_partition_maps)
+		exit()
+
+		# Make sure it is the correct type of tag
+		if not self.descriptor_tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
+			self._is_valid = False
+			return
+
+		# Make sure the reserved space is all zeros
+		for n in self.reserved:
+			if not to_uint8(n) == 0:
+				self._is_valid = False
+				return
+
+	def get_is_valid(self):
+		return self._is_valid
+	is_valid = property(get_is_valid)
+
+
 # FIXME: This assumes the sector size is 2048
 def is_valid_udf(file, file_size):
 	# Move to the start of the file
@@ -311,7 +393,22 @@ def go(file, file_size, sector_size):
 	if file_size < 257 * sector_size:
 		return
 
-	for sector in range(257):
+	# "5.2 UDF Volume Structure and Mount Procedure" of https://sites.google.com/site/udfintro/
+	# Read the Anchor VD Pointer
+	sector = 256
+	file.seek(sector * sector_size)
+	buffer = file.read(512)
+	tag = DescriptorTag(buffer[0 : 16])
+	if not tag.tag_identifier == TagIdentifier.AnchorVolumeDescriptorPointer:
+		exit(1)
+	avdp = AnchorVolumeDescriptorPointer(buffer)
+	
+	# Get the location of the primary volume descriptor
+	pvd_sector = avdp.main_volume_descriptor_sequence_extent.extent_location
+		
+	logical_volume_descriptor = None
+	partition_descriptor = None
+	for sector in range(pvd_sector, 257):
 		# Move to the sector start
 		file.seek(sector * sector_size)
 
@@ -342,9 +439,11 @@ def go(file, file_size, sector_size):
 			print(sector, 'ImplementationUseVolumeDescriptor')
 			pass #ImplementationUseVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.PartitionDescriptor:
+			partition_descriptor = PartitionDescriptor(buffer)
 			print(sector, 'PartitionDescriptor')
 			pass #PartitionDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
+			logical_volume_descriptor = LogicalVolumeDescriptor(buffer)
 			print(sector, 'LogicalVolumeDescriptor')
 			pass #LogicalVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.UnallocatedSpaceDescriptor:
