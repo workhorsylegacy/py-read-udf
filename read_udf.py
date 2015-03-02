@@ -95,13 +95,33 @@ class BaseTag(object):
 				raise Exception("Reserve space at {0} was not zero.".format(start))
 
 
-class ApplicationIdentifier(BaseTag):
-	def __init__(self, buffer, start):
-		super(ApplicationIdentifier, self).__init__(32, buffer, start)
+# "2.1.5 Entity Identifier" of http://www.osta.org/specs/pdf/udf260.pdf
+class EntityIdType(object): # enum
+	unknown = 0
+	DomainIdentifier = 1
+	UDFIdentifier = 2
+	ImplementationIdentifier = 3
+	ApplicationIdentifier = 4
 
+
+# page 15 of http://www.osta.org/specs/pdf/udf260.pdf
+# 1/12 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class EntityID(BaseTag):
+	def __init__(self, entity_id_type, buffer, start):
+		super(EntityID, self).__init__(32, buffer, start)
+
+		self.entity_id_type = entity_id_type
 		self.flags = to_uint8(buffer[start + 0])
 		self.identifier = buffer[start + 1 : start + 24]
 		self.identifier_suffix = buffer[start + 24 : start + 32]
+
+		#print('self.flags', self.flags)
+		#print('self.identifier', self.identifier)
+		#print('self.identifier_suffix', self.identifier_suffix)
+
+		# Make sure the flag is always 0
+		#if self.flags != 0:
+		#	raise Exception("EntityID flags was not zero")
 
 
 # page 3/4 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
@@ -197,9 +217,9 @@ class PrimaryVolumeDescriptor(BaseTag):
 		self.expalnatory_character_set = buffer[264 : 328] # FIXME: char spec
 		self.volume_abstract = ExtentDescriptor(buffer, 328)
 		self.volume_copyright_notice = ExtentDescriptor(buffer, 336)
-		self.application_identifier = ApplicationIdentifier(buffer, 344)
+		self.application_identifier = EntityID(EntityIdType.ApplicationIdentifier, buffer, 344)
 		self.recording_date_and_time = buffer[376 : 388] # FIXME: timestamp
-		self.implementation_identifier = buffer[388 : 420] # FIXME: regid
+		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 388)
 		self.implementation_use = buffer[420 : 484]
 		self.predecessor_volume_descriptor_sequence_location = to_uint32(buffer, 484)
 		self.flags = to_uint16(buffer, 488)
@@ -209,6 +229,7 @@ class PrimaryVolumeDescriptor(BaseTag):
 
 
 # page 3/17 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+# page 45 of http://www.osta.org/specs/pdf/udf260.pdf
 class PartitionDescriptor(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(PartitionDescriptor, self).__init__(512, buffer, start)
@@ -219,15 +240,26 @@ class PartitionDescriptor(BaseTag):
 		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
 		self.partition_flags = to_uint16(buffer, 20)
 		self.partition_number = to_uint16(buffer, 22)
-		self.partition_contents = buffer[24 : 56] # FIXME regid
+		self.partition_contents = EntityID(EntityIdType.UDFIdentifier, buffer, 24)
 		self.partition_contents_use = buffer[56 : 184]
 		self.access_type = to_uint32(buffer, 184)
 		self.partition_starting_location = to_uint32(buffer, 188)
 		self.partition_length = to_uint32(buffer, 192)
-		self.implementation_identifier = buffer[196 : 228] # FIXME: regid
+		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 196)
 		self.implementation_use = buffer[228 : 356]
 		self.reserved = buffer[356 : 512]
 
+		# If the partition has allocated volume space
+		if self.partition_flags == 1:
+			pass
+		'''
+		print('self.volume_descriptor_sequence_number', self.volume_descriptor_sequence_number)
+		print('self.partition_flags', self.partition_flags)
+		print('self.partition_number', self.partition_number)
+		print('self.partition_contents', self.partition_contents)
+		print('self.partition_contents_use', self.partition_contents_use)
+		print('self.partition_starting_location', self.partition_starting_location)
+		'''
 		self._assert_reserve_space(buffer, start + 356, 156)
 
 
@@ -243,14 +275,21 @@ class LogicalVolumeDescriptor(BaseTag):
 		self.descriptor_character_set = buffer[20 : 84] # FIXME: charspec
 		self.logical_volume_identifier = to_dstring(buffer, 84, 128)
 		self.logical_block_size = to_uint32(buffer, 128)
-		self.domain_identifier = buffer[216 : 248] # FIXME: regid
+		self.domain_identifier = EntityID(EntityIdType.DomainIdentifier, buffer, 216)
 		self.logical_volume_centents_use = buffer[248 : 264]
 		self.map_table_length = to_uint32(buffer, 264)
 		self.number_of_partition_maps = to_uint32(buffer, 268)
-		self.implementation_identifier = buffer[272 : 304] # FIXME: regid
+		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 272)
 		self.implementation_use = buffer[304 : 432]
 		self.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
 		self.partition_maps = buffer[440 : 440 + (self.map_table_length * self.number_of_partition_maps)]
+
+
+class TerminatingDescriptor(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(TerminatingDescriptor, self).__init__(512, buffer, start)
+
+	# FIXME: Add the rest
 
 
 # FIXME: This assumes the sector size is 2048
@@ -343,8 +382,10 @@ def go(file, file_size, sector_size):
 	# Get the location of the primary volume descriptor
 	pvd_sector = avdp.main_volume_descriptor_sequence_extent.extent_location
 		
+	# Look through all the sectors and find the partition descriptor
 	logical_volume_descriptor = None
 	partition_descriptor = None
+	terminating_descriptor = None
 	for sector in range(pvd_sector, 257):
 		# Move to the sector start
 		file.seek(sector * sector_size)
@@ -352,10 +393,9 @@ def go(file, file_size, sector_size):
 		# Read the Descriptor Tag
 		buffer = file.read(16)
 		tag = None
-
-		# Skip if not valid
 		try:
 			tag = DescriptorTag(buffer)
+		# Skip if not valid
 		except:
 			continue
 
@@ -363,39 +403,45 @@ def go(file, file_size, sector_size):
 		file.seek(sector * sector_size)
 		buffer = file.read(512)
 		
-		print('tag.tag_identifier', tag.tag_identifier)
+		#print('tag.tag_identifier', tag.tag_identifier)
 
 		if tag.tag_identifier == TagIdentifier.PrimaryVolumeDescriptor:
-			print(sector, 'PrimaryVolumeDescriptor')
+			#print(sector, 'PrimaryVolumeDescriptor')
 			desc = PrimaryVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.AnchorVolumeDescriptorPointer:
-			print(sector, 'AnchorVolumeDescriptorPointer')
+			#print(sector, 'AnchorVolumeDescriptorPointer')
 			anchor = AnchorVolumeDescriptorPointer(buffer)
 		elif tag.tag_identifier == TagIdentifier.VolumeDescriptorPointer:
-			print(sector, 'VolumeDescriptorPointer')
+			#print(sector, 'VolumeDescriptorPointer')
 			pass #VolumeDescriptorPointer(buffer)
 		elif tag.tag_identifier == TagIdentifier.ImplementationUseVolumeDescriptor:
-			print(sector, 'ImplementationUseVolumeDescriptor')
+			#print(sector, 'ImplementationUseVolumeDescriptor')
 			pass #ImplementationUseVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.PartitionDescriptor:
 			partition_descriptor = PartitionDescriptor(buffer)
 			print(sector, 'PartitionDescriptor')
-			pass #PartitionDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
 			logical_volume_descriptor = LogicalVolumeDescriptor(buffer)
 			print(sector, 'LogicalVolumeDescriptor')
-			pass #LogicalVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.UnallocatedSpaceDescriptor:
-			print(sector, 'UnallocatedSpaceDescriptor')
+			#print(sector, 'UnallocatedSpaceDescriptor')
 			pass #UnallocatedSpaceDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.TerminatingDescriptor:
 			print(sector, 'TerminatingDescriptor')
-			pass #TerminatingDescriptor(buffer)
+			terminating_descriptor = TerminatingDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeIntegrityDescriptor:
-			print(sector, 'LogicalVolumeIntegrityDescriptor')
+			#print(sector, 'LogicalVolumeIntegrityDescriptor')
 			pass #LogicalVolumeIntegrityDescriptor(buffer)
 		elif tag.tag_identifier != 0:
 			print("Unexpected Descriptor Tag :{0}".format(tag.tag_identifier))
+
+		if logical_volume_descriptor and partition_descriptor and terminating_descriptor:
+			break
+
+	if not logical_volume_descriptor or not partition_descriptor or not terminating_descriptor:
+		raise Exception("Failed to get things")
+		
+	
 	
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
