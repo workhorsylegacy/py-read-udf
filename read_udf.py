@@ -264,6 +264,7 @@ class PartitionDescriptor(BaseTag):
 
 
 # page 3/19 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+# 3 page 24 of http://www.osta.org/specs/pdf/udf260.pdf
 class LogicalVolumeDescriptor(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(LogicalVolumeDescriptor, self).__init__(512, buffer, start)
@@ -282,7 +283,20 @@ class LogicalVolumeDescriptor(BaseTag):
 		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 272)
 		self.implementation_use = buffer[304 : 432]
 		self.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
-		self.partition_maps = buffer[440 : 440 + (self.map_table_length * self.number_of_partition_maps)]
+
+		self.partition_maps = []
+		part_start = 440
+		for i in range(self.number_of_partition_maps):
+			partition_type = to_uint8(buffer[part_start])
+			print('partition_type', partition_type)
+			if partition_type == 1:
+				partition = Type1PartitionMap(buffer, part_start)
+				print(partition.partition_map_type, partition.partition_map_type)
+			elif partition_type == 2:
+				partition = Type2PartitionMap(buffer, part_start)
+
+			self.partition_maps.append(partition)
+			part_start += partition.size
 
 
 class TerminatingDescriptor(BaseTag):
@@ -290,6 +304,33 @@ class TerminatingDescriptor(BaseTag):
 		super(TerminatingDescriptor, self).__init__(512, buffer, start)
 
 	# FIXME: Add the rest
+
+
+# page 3/21 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class Type1PartitionMap(BaseTag):
+	def __init__(self, buffer, start):
+		super(Type1PartitionMap, self).__init__(6, buffer, start)
+
+		self.partition_map_type = to_uint8(buffer[start + 0])
+		self.partition_map_length = to_uint8(buffer[start + 1])
+		self.volume_sequence_number = to_uint16(buffer, start + 2)
+		self.partition_number = to_uint16(buffer, start + 4)
+
+		if not self.partition_map_type == 1:
+			raise Exception("Type 1 Partition Map Type was {0} instead of 1.".format(self.partition_map_type))
+
+		if not self.partition_map_length == self.size:
+			raise Exception("Type 1 Partition Map Length was {0} instead of {1}.".format(self.partition_map_length, self.size))
+
+
+# page 3/22 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class Type2PartitionMap(BaseTag):
+	def __init__(self, buffer, start):
+		super(Type2PartitionMap, self).__init__(64, buffer, start)
+
+		self.partition_map_type = to_uint8(buffer[start + 0])
+		self.partition_map_length = to_uint8(buffer[start + 1])
+		self.partition_type_identifier = EntityID(EntityIdType.UDFIdentifier, start + 4, start + 32)
 
 
 # FIXME: This assumes the sector size is 2048
@@ -440,8 +481,24 @@ def go(file, file_size, sector_size):
 
 	if not logical_volume_descriptor or not partition_descriptor or not terminating_descriptor:
 		raise Exception("Failed to get things")
-		
-	
+
+
+	if not "*OSTA UDF Compliant" in logical_volume_descriptor.domain_identifier.identifier:
+		raise Exception("Logical Volume is not OSTA compliant")
+
+
+	#print('logical_volume_descriptor.logical_volume_centents_use', logical_volume_descriptor.logical_volume_centents_use)
+	print('logical_volume_descriptor.map_table_length', logical_volume_descriptor.map_table_length)
+	print('logical_volume_descriptor.number_of_partition_maps', logical_volume_descriptor.number_of_partition_maps)
+	print('logical_volume_descriptor.logical_volume_centents_use', logical_volume_descriptor.logical_volume_centents_use)
+	#	logical_volume_descriptor.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 272)
+	#	logical_volume_descriptor.implementation_use = buffer[304 : 432]
+	#	logical_volume_descriptor.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
+	#	logical_volume_descriptor.partition_maps = buffer[440 : 440 + (self.map_table_length * self.number_of_partition_maps)]
+	for partition in logical_volume_descriptor.partition_maps:
+		print(partition.partition_map_type)
+
+	print('partition number', partition_descriptor.partition_number)
 	
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
