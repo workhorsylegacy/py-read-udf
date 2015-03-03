@@ -209,6 +209,9 @@ class Type1Partition(object):
 		self.partition_map = partition_map
 		self.physical_partition = physical_partition
 
+	def get_logical_block_size(self):
+		return self.logical_volume_descriptor.logical_block_size
+	logical_block_size = property(get_logical_block_size)
 
 # page 4/17 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 class FileSetDescriptor(BaseTag):
@@ -355,6 +358,7 @@ class LogicalVolumeDescriptor(BaseTag):
 	# "2.2.4.4 byte LogicalVolumeContentsUse[16]" of http://www.osta.org/specs/pdf/udf260.pdf
 	def get_file_set_descriptor_location(self):
 		return LongAllocationDescriptor(self.logical_volume_contents_use)
+	file_set_descriptor_location = property(get_file_set_descriptor_location)
 
 
 # page 60 of http://www.osta.org/specs/pdf/udf260.pdf
@@ -592,11 +596,15 @@ def go(file, file_size, sector_size):
 		elif isinstance(map, Type2PartitionMap):
 			raise NotImplementedError("FIXME: Add support for Type 2 Partitions.")
 
-	print(logical_volume_descriptor.get_file_set_descriptor_location())
-	#print('partition number', partition_descriptor.partition_number)
+	logical_volume_descriptor.file_set_descriptor_location
+	ext_buffer = read_extent(logical_partitions, logical_volume_descriptor.file_set_descriptor_location)
 
 
-
+def read_extent(logical_partitions, extent):
+	print('extent.extent_location.partition_reference_number', extent.extent_location.partition_reference_number)
+	logical_partition = logical_partitions[extent.extent_location.partition_reference_number]
+	start = extent.extent_location.logical_block_number * logical_partition.logical_block_size
+	return logical_partition.content.read(pos, extent.extent_length)
 
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
