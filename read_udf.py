@@ -125,6 +125,7 @@ class EntityID(BaseTag):
 
 
 # page 3/4 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+# page 4/4 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 class TagIdentifier(object): # enum
 	unknown = 0
 	PrimaryVolumeDescriptor = 1
@@ -136,6 +137,7 @@ class TagIdentifier(object): # enum
 	UnallocatedSpaceDescriptor = 7
 	TerminatingDescriptor = 8
 	LogicalVolumeIntegrityDescriptor = 9
+	FileSetDescriptor = 256
 
 
 # page 3/3 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
@@ -193,6 +195,49 @@ def to_dstring(buffer, start, max_length):
 	retval = raw[1 : 1 + length]
 	#print('dstring', retval)
 	return retval
+
+
+class PhysicalPartition(object):
+	def __init__(self, start, size):
+		self._start = start
+		self._size = size
+
+
+class Type1Partition(object):
+	def __init__(self, logical_volume_descriptor, partition_map, physical_partition):
+		self.logical_volume_descriptor = logical_volume_descriptor
+		self.partition_map = partition_map
+		self.physical_partition = physical_partition
+
+
+# page 4/17 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class FileSetDescriptor(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(PrimaryVolumeDescriptor, self).__init__(512, buffer, start)
+
+		self.descriptor_tag = DescriptorTag(buffer)
+		self._assert_tag_identifier(TagIdentifier.FileSetDescriptor)
+
+		self.recording_date_and_time = buffer[16 : 28] # FIXME: timestamp
+		self.interchange_level = to_uint16(buffer, 28)
+		self.maximum_interchange_level = to_uint16(buffer, 30)
+		self.character_set_list = to_uint32(buffer, 32)
+		self.maximum_character_set_list = to_uint32(buffer, 36)
+		self.file_set_number = to_uint32(buffer, 40)
+		self.file_set_descriptor_number = to_uint32(buffer, 44)
+		self.logical_volume_identifier_character_set = buffer[48 : 112] # FIXME: charspec
+		self.logical_volume_identifier = to_dstring(buffer, 112, 128)
+		self.file_set_character_set = buffer[240 : 274] # FIXME: charspec
+		self.file_set_identifier = to_dstring(buffer, 304, 32)
+		self.copyright_file_identifier = to_dstring(buffer, 336, 32)
+		self.abstract_file_identifier = to_dstring(buffer, 368, 32)
+		self.root_directory_icb = buffer[400 : 416] # FIXME: long_ad
+		self.domain_identifier = EntityId(EntityIdType.DomainIdentifier, buffer, 416)
+		self.next_extent = buffer[448 : 464] # FIXME: long_ad
+		self.system_stream_directory_icb = buffer[464 : 480] # FIXME: long_ad
+		self.reserved = buffer[480 : 512]
+
+		self._assert_reserve_space(buffer, 480, 32)
 
 
 # page 3/12 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
@@ -264,7 +309,7 @@ class PartitionDescriptor(BaseTag):
 
 
 # page 3/19 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
-# 3 page 24 of http://www.osta.org/specs/pdf/udf260.pdf
+# page 24 of http://www.osta.org/specs/pdf/udf260.pdf
 class LogicalVolumeDescriptor(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(LogicalVolumeDescriptor, self).__init__(512, buffer, start)
@@ -277,26 +322,57 @@ class LogicalVolumeDescriptor(BaseTag):
 		self.logical_volume_identifier = to_dstring(buffer, 84, 128)
 		self.logical_block_size = to_uint32(buffer, 128)
 		self.domain_identifier = EntityID(EntityIdType.DomainIdentifier, buffer, 216)
-		self.logical_volume_centents_use = buffer[248 : 264]
+		self.logical_volume_contents_use = buffer[248 : 264]
 		self.map_table_length = to_uint32(buffer, 264)
 		self.number_of_partition_maps = to_uint32(buffer, 268)
 		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 272)
 		self.implementation_use = buffer[304 : 432]
 		self.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
+		self._raw_partition_maps = buffer[440 : 512]
 
-		self.partition_maps = []
-		part_start = 440
+		if not "*OSTA UDF Compliant" in self.domain_identifier.identifier:
+			raise Exception("Logical Volume is not OSTA compliant")
+
+	# "10.6.13 Partition Maps (BP 440)" of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+	def get_partition_maps(self):
+		buffer = self._raw_partition_maps
+		retval = []
+		part_start = 0
 		for i in range(self.number_of_partition_maps):
 			partition_type = to_uint8(buffer[part_start])
-			print('partition_type', partition_type)
+			partitioin = None
 			if partition_type == 1:
 				partition = Type1PartitionMap(buffer, part_start)
-				print(partition.partition_map_type, partition.partition_map_type)
-			elif partition_type == 2:
-				partition = Type2PartitionMap(buffer, part_start)
+			else:
+				raise Exception("Unexpected partition type {0}".format(partition_type))
 
-			self.partition_maps.append(partition)
+			retval.append(partition)
 			part_start += partition.size
+
+		return retval
+	partition_maps = property(get_partition_maps)
+
+	# "2.2.4.4 byte LogicalVolumeContentsUse[16]" of http://www.osta.org/specs/pdf/udf260.pdf
+	def get_file_set_descriptor_location(self):
+		return LongAllocationDescriptor(self.logical_volume_contents_use)
+
+
+# page 60 of http://www.osta.org/specs/pdf/udf260.pdf
+class LongAllocationDescriptor(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(LongAllocationDescriptor, self).__init__(16, buffer, start)
+
+		self.extent_length = to_uint32(buffer, 0)
+		self.extent_location = LogicalBlockAddress(buffer, 4)
+		self.implementation_use = buffer[10 : 16]
+
+
+# page 4/3 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class LogicalBlockAddress(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(LogicalBlockAddress, self).__init__(6, buffer, start)
+		self.logical_block_number = to_uint32(buffer, 0)
+		self.partition_reference_number = to_uint16(buffer, 4)
 
 
 class TerminatingDescriptor(BaseTag):
@@ -331,6 +407,12 @@ class Type2PartitionMap(BaseTag):
 		self.partition_map_type = to_uint8(buffer[start + 0])
 		self.partition_map_length = to_uint8(buffer[start + 1])
 		self.partition_type_identifier = EntityID(EntityIdType.UDFIdentifier, start + 4, start + 32)
+
+		if not self.partition_map_type == 2:
+			raise Exception("Type 2 Partition Map Type was {0} instead of 2.".format(self.partition_map_type))
+
+		if not self.partition_map_length == self.size:
+			raise Exception("Type 2 Partition Map Length was {0} instead of {1}.".format(self.partition_map_length, self.size))
 
 
 # FIXME: This assumes the sector size is 2048
@@ -425,8 +507,9 @@ def go(file, file_size, sector_size):
 		
 	# Look through all the sectors and find the partition descriptor
 	logical_volume_descriptor = None
-	partition_descriptor = None
 	terminating_descriptor = None
+	physical_partitions = {}
+	logical_partitions = []
 	for sector in range(pvd_sector, 257):
 		# Move to the sector start
 		file.seek(sector * sector_size)
@@ -460,6 +543,10 @@ def go(file, file_size, sector_size):
 			pass #ImplementationUseVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.PartitionDescriptor:
 			partition_descriptor = PartitionDescriptor(buffer)
+			start = partition_descriptor.partition_starting_location * sector_size
+			length = partition_descriptor.partition_length * sector_size
+			physical_partition = PhysicalPartition(start, length)
+			physical_partitions[partition_descriptor.partition_number] = physical_partition
 			print(sector, 'PartitionDescriptor')
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
 			logical_volume_descriptor = LogicalVolumeDescriptor(buffer)
@@ -479,27 +566,38 @@ def go(file, file_size, sector_size):
 		if logical_volume_descriptor and partition_descriptor and terminating_descriptor:
 			break
 
+	# Make sure we have all the segments we need
 	if not logical_volume_descriptor or not partition_descriptor or not terminating_descriptor:
-		raise Exception("Failed to get things")
+		raise Exception("Failed to get the required segments")
 
 
-	if not "*OSTA UDF Compliant" in logical_volume_descriptor.domain_identifier.identifier:
-		raise Exception("Logical Volume is not OSTA compliant")
-
-
-	#print('logical_volume_descriptor.logical_volume_centents_use', logical_volume_descriptor.logical_volume_centents_use)
+	#print('logical_volume_descriptor.logical_volume_contents_use', logical_volume_descriptor.logical_volume_contents_use)
 	print('logical_volume_descriptor.map_table_length', logical_volume_descriptor.map_table_length)
 	print('logical_volume_descriptor.number_of_partition_maps', logical_volume_descriptor.number_of_partition_maps)
-	print('logical_volume_descriptor.logical_volume_centents_use', logical_volume_descriptor.logical_volume_centents_use)
+	print('logical_volume_descriptor.logical_volume_contents_use', logical_volume_descriptor.logical_volume_contents_use)
 	#	logical_volume_descriptor.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 272)
 	#	logical_volume_descriptor.implementation_use = buffer[304 : 432]
 	#	logical_volume_descriptor.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
 	#	logical_volume_descriptor.partition_maps = buffer[440 : 440 + (self.map_table_length * self.number_of_partition_maps)]
-	for partition in logical_volume_descriptor.partition_maps:
-		print(partition.partition_map_type)
 
-	print('partition number', partition_descriptor.partition_number)
-	
+	# Get all the logical partitions
+	for map in logical_volume_descriptor.partition_maps:
+		print(map.partition_map_type)
+
+		if isinstance(map, Type1PartitionMap):
+			partition_number = map.partition_number
+			physical_Partition = physical_partitions[partition_number]
+			partition = Type1Partition(logical_volume_descriptor, map, physical_Partition)
+			logical_partitions.append(partition)
+		elif isinstance(map, Type2PartitionMap):
+			raise NotImplementedError("FIXME: Add support for Type 2 Partitions.")
+
+	print(logical_volume_descriptor.get_file_set_descriptor_location())
+	#print('partition number', partition_descriptor.partition_number)
+
+
+
+
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
 file_size = os.path.getsize(game_file)
