@@ -198,9 +198,10 @@ def to_dstring(buffer, start, max_length):
 
 
 class PhysicalPartition(object):
-	def __init__(self, start, size):
+	def __init__(self, file, start, length):
+		self._file = file
 		self._start = start
-		self._size = size
+		self._length = length
 
 
 class Type1Partition(object):
@@ -213,10 +214,11 @@ class Type1Partition(object):
 		return self.logical_volume_descriptor.logical_block_size
 	logical_block_size = property(get_logical_block_size)
 
+
 # page 4/17 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 class FileSetDescriptor(BaseTag):
 	def __init__(self, buffer, start = 0):
-		super(PrimaryVolumeDescriptor, self).__init__(512, buffer, start)
+		super(FileSetDescriptor, self).__init__(512, buffer, start)
 
 		self.descriptor_tag = DescriptorTag(buffer)
 		self._assert_tag_identifier(TagIdentifier.FileSetDescriptor)
@@ -235,7 +237,7 @@ class FileSetDescriptor(BaseTag):
 		self.copyright_file_identifier = to_dstring(buffer, 336, 32)
 		self.abstract_file_identifier = to_dstring(buffer, 368, 32)
 		self.root_directory_icb = buffer[400 : 416] # FIXME: long_ad
-		self.domain_identifier = EntityId(EntityIdType.DomainIdentifier, buffer, 416)
+		self.domain_identifier = EntityID(EntityIdType.DomainIdentifier, buffer, 416)
 		self.next_extent = buffer[448 : 464] # FIXME: long_ad
 		self.system_stream_directory_icb = buffer[464 : 480] # FIXME: long_ad
 		self.reserved = buffer[480 : 512]
@@ -419,6 +421,20 @@ class Type2PartitionMap(BaseTag):
 			raise Exception("Type 2 Partition Map Length was {0} instead of {1}.".format(self.partition_map_length, self.size))
 
 
+def read_extent(file, logical_partitions, extent):
+	logical_partition = logical_partitions[extent.extent_location.partition_reference_number]
+	offset = logical_partition.physical_partition._start
+	start = extent.extent_location.logical_block_number * logical_partition.logical_block_size
+	length = extent.extent_length
+	#print('offset', offset) # 544768
+	#print('start', start) # 544768
+	#print('length', length) # 4096
+	file.seek(offset + start)
+	retval = file.read(length)
+	#print('file.tell()', file.tell())
+	return retval
+
+
 # FIXME: This assumes the sector size is 2048
 def is_valid_udf(file, file_size):
 	# Move to the start of the file
@@ -549,7 +565,7 @@ def go(file, file_size, sector_size):
 			partition_descriptor = PartitionDescriptor(buffer)
 			start = partition_descriptor.partition_starting_location * sector_size
 			length = partition_descriptor.partition_length * sector_size
-			physical_partition = PhysicalPartition(start, length)
+			physical_partition = PhysicalPartition(file, start, length)
 			physical_partitions[partition_descriptor.partition_number] = physical_partition
 			print(sector, 'PartitionDescriptor')
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
@@ -574,16 +590,6 @@ def go(file, file_size, sector_size):
 	if not logical_volume_descriptor or not partition_descriptor or not terminating_descriptor:
 		raise Exception("Failed to get the required segments")
 
-
-	#print('logical_volume_descriptor.logical_volume_contents_use', logical_volume_descriptor.logical_volume_contents_use)
-	print('logical_volume_descriptor.map_table_length', logical_volume_descriptor.map_table_length)
-	print('logical_volume_descriptor.number_of_partition_maps', logical_volume_descriptor.number_of_partition_maps)
-	print('logical_volume_descriptor.logical_volume_contents_use', logical_volume_descriptor.logical_volume_contents_use)
-	#	logical_volume_descriptor.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 272)
-	#	logical_volume_descriptor.implementation_use = buffer[304 : 432]
-	#	logical_volume_descriptor.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
-	#	logical_volume_descriptor.partition_maps = buffer[440 : 440 + (self.map_table_length * self.number_of_partition_maps)]
-
 	# Get all the logical partitions
 	for map in logical_volume_descriptor.partition_maps:
 		print(map.partition_map_type)
@@ -596,15 +602,17 @@ def go(file, file_size, sector_size):
 		elif isinstance(map, Type2PartitionMap):
 			raise NotImplementedError("FIXME: Add support for Type 2 Partitions.")
 
-	logical_volume_descriptor.file_set_descriptor_location
-	ext_buffer = read_extent(logical_partitions, logical_volume_descriptor.file_set_descriptor_location)
+	# Get the extent from the partition
+	extent_buffer = read_extent(file, logical_partitions, logical_volume_descriptor.file_set_descriptor_location)
+	tag = None
+	try:
+		tag = DescriptorTag(extent_buffer)
+	except:
+		pass
 
+	# Get the root file set descriptor
+	file_set_descriptor = FileSetDescriptor(extent_buffer)
 
-def read_extent(logical_partitions, extent):
-	print('extent.extent_location.partition_reference_number', extent.extent_location.partition_reference_number)
-	logical_partition = logical_partitions[extent.extent_location.partition_reference_number]
-	start = extent.extent_location.logical_block_number * logical_partition.logical_block_size
-	return logical_partition.content.read(pos, extent.extent_length)
 
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
