@@ -177,12 +177,12 @@ class AnchorVolumeDescriptorPointer(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(AnchorVolumeDescriptorPointer, self).__init__(512, buffer, start)
 
-		self.descriptor_tag = DescriptorTag(buffer)
+		self.descriptor_tag = DescriptorTag(buffer, start)
 		self._assert_tag_identifier(TagIdentifier.AnchorVolumeDescriptorPointer)
 
-		self.main_volume_descriptor_sequence_extent = ExtentDescriptor(buffer, 16)
-		self.reserve_volume_descriptor_sequence_extent = ExtentDescriptor(buffer, 24)
-		self.reserved = buffer[32 : 512]
+		self.main_volume_descriptor_sequence_extent = ExtentDescriptor(buffer, start + 16)
+		self.reserve_volume_descriptor_sequence_extent = ExtentDescriptor(buffer, start + 24)
+		self.reserved = buffer[start + 32 : start + 512]
 
 		self._assert_reserve_space(buffer, start + 32, 480)
 
@@ -220,29 +220,29 @@ class FileSetDescriptor(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(FileSetDescriptor, self).__init__(512, buffer, start)
 
-		self.descriptor_tag = DescriptorTag(buffer)
+		self.descriptor_tag = DescriptorTag(buffer, start)
 		self._assert_tag_identifier(TagIdentifier.FileSetDescriptor)
 
-		self.recording_date_and_time = buffer[16 : 28] # FIXME: timestamp
-		self.interchange_level = to_uint16(buffer, 28)
-		self.maximum_interchange_level = to_uint16(buffer, 30)
-		self.character_set_list = to_uint32(buffer, 32)
-		self.maximum_character_set_list = to_uint32(buffer, 36)
-		self.file_set_number = to_uint32(buffer, 40)
-		self.file_set_descriptor_number = to_uint32(buffer, 44)
-		self.logical_volume_identifier_character_set = buffer[48 : 112] # FIXME: charspec
-		self.logical_volume_identifier = to_dstring(buffer, 112, 128)
-		self.file_set_character_set = buffer[240 : 274] # FIXME: charspec
-		self.file_set_identifier = to_dstring(buffer, 304, 32)
-		self.copyright_file_identifier = to_dstring(buffer, 336, 32)
-		self.abstract_file_identifier = to_dstring(buffer, 368, 32)
-		self.root_directory_icb = buffer[400 : 416] # FIXME: long_ad
-		self.domain_identifier = EntityID(EntityIdType.DomainIdentifier, buffer, 416)
-		self.next_extent = buffer[448 : 464] # FIXME: long_ad
-		self.system_stream_directory_icb = buffer[464 : 480] # FIXME: long_ad
-		self.reserved = buffer[480 : 512]
+		self.recording_date_and_time = buffer[start + 16 : start + 28] # FIXME: timestamp
+		self.interchange_level = to_uint16(buffer, start + 28)
+		self.maximum_interchange_level = to_uint16(buffer, start + 30)
+		self.character_set_list = to_uint32(buffer, start + 32)
+		self.maximum_character_set_list = to_uint32(buffer, start + 36)
+		self.file_set_number = to_uint32(buffer, start + 40)
+		self.file_set_descriptor_number = to_uint32(buffer, start + 44)
+		self.logical_volume_identifier_character_set = buffer[start + 48 : start + 112] # FIXME: charspec
+		self.logical_volume_identifier = to_dstring(buffer, start + 112, 128)
+		self.file_set_character_set = buffer[start + 240 : start + 274] # FIXME: charspec
+		self.file_set_identifier = to_dstring(buffer, start + 304, 32)
+		self.copyright_file_identifier = to_dstring(buffer, start + 336, 32)
+		self.abstract_file_identifier = to_dstring(buffer, start + 368, 32)
+		self.root_directory_icb = LongAllocationDescriptor(buffer, start + 400)
+		self.domain_identifier = EntityID(EntityIdType.DomainIdentifier, buffer, start + 416)
+		self.next_extent = LongAllocationDescriptor(buffer, start + 448)
+		self.system_stream_directory_icb = LongAllocationDescriptor(buffer, start + 464)
+		self.reserved = buffer[start + 480 : start + 512]
 
-		self._assert_reserve_space(buffer, 480, 32)
+		self._assert_reserve_space(buffer, start + 480, 32)
 
 
 # page 3/12 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
@@ -250,30 +250,30 @@ class PrimaryVolumeDescriptor(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(PrimaryVolumeDescriptor, self).__init__(512, buffer, start)
 
-		self.descriptor_tag = DescriptorTag(buffer)
+		self.descriptor_tag = DescriptorTag(buffer, start)
 		self._assert_tag_identifier(TagIdentifier.PrimaryVolumeDescriptor)
 
-		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
-		self.primary_volume_descriptor_number = to_uint32(buffer, 20)
-		self.volume_identifier = to_dstring(buffer, 24, 32)
-		self.volume_sequence_number = to_uint16(buffer, 56)
-		self.maximum_volume_sequence_number = to_uint16(buffer, 58)
-		self.interchange_level = to_uint16(buffer, 60)
-		self.maximum_interchange_level = to_uint16(buffer, 62)
-		self.character_set_list = to_uint32(buffer, 64)
-		self.maximum_character_set_list = to_uint32(buffer, 68)
-		self.volume_set_identifier = to_dstring(buffer, 72, 128)
-		self.descriptor_character_set = buffer[200 : 264] # FIXME: char spec
-		self.expalnatory_character_set = buffer[264 : 328] # FIXME: char spec
-		self.volume_abstract = ExtentDescriptor(buffer, 328)
-		self.volume_copyright_notice = ExtentDescriptor(buffer, 336)
-		self.application_identifier = EntityID(EntityIdType.ApplicationIdentifier, buffer, 344)
-		self.recording_date_and_time = buffer[376 : 388] # FIXME: timestamp
-		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 388)
-		self.implementation_use = buffer[420 : 484]
-		self.predecessor_volume_descriptor_sequence_location = to_uint32(buffer, 484)
-		self.flags = to_uint16(buffer, 488)
-		self.reserved = buffer[490 : 512]
+		self.volume_descriptor_sequence_number = to_uint32(buffer, start + 16)
+		self.primary_volume_descriptor_number = to_uint32(buffer, start + 20)
+		self.volume_identifier = to_dstring(buffer, start + 24, 32)
+		self.volume_sequence_number = to_uint16(buffer, start + 56)
+		self.maximum_volume_sequence_number = to_uint16(buffer, start + 58)
+		self.interchange_level = to_uint16(buffer, start + 60)
+		self.maximum_interchange_level = to_uint16(buffer, start + 62)
+		self.character_set_list = to_uint32(buffer, start + 64)
+		self.maximum_character_set_list = to_uint32(buffer, start + 68)
+		self.volume_set_identifier = to_dstring(buffer, start + 72, 128)
+		self.descriptor_character_set = buffer[start + 200 : start + 264] # FIXME: char spec
+		self.expalnatory_character_set = buffer[start + 264 : start + 328] # FIXME: char spec
+		self.volume_abstract = ExtentDescriptor(buffer, start + 328)
+		self.volume_copyright_notice = ExtentDescriptor(buffer, start + 336)
+		self.application_identifier = EntityID(EntityIdType.ApplicationIdentifier, buffer, start + 344)
+		self.recording_date_and_time = buffer[start + 376 : start + 388] # FIXME: timestamp
+		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, start + 388)
+		self.implementation_use = buffer[start + 420 : start + 484]
+		self.predecessor_volume_descriptor_sequence_location = to_uint32(buffer, start + 484)
+		self.flags = to_uint16(buffer, start + 488)
+		self.reserved = buffer[start + 490 : start + 512]
 
 		self._assert_reserve_space(buffer, start + 490, 22)
 
@@ -284,20 +284,20 @@ class PartitionDescriptor(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(PartitionDescriptor, self).__init__(512, buffer, start)
 
-		self.descriptor_tag = DescriptorTag(buffer)
+		self.descriptor_tag = DescriptorTag(buffer, start)
 		self._assert_tag_identifier(TagIdentifier.PartitionDescriptor)
 
-		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
-		self.partition_flags = to_uint16(buffer, 20)
-		self.partition_number = to_uint16(buffer, 22)
-		self.partition_contents = EntityID(EntityIdType.UDFIdentifier, buffer, 24)
-		self.partition_contents_use = buffer[56 : 184]
-		self.access_type = to_uint32(buffer, 184)
-		self.partition_starting_location = to_uint32(buffer, 188)
-		self.partition_length = to_uint32(buffer, 192)
-		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 196)
-		self.implementation_use = buffer[228 : 356]
-		self.reserved = buffer[356 : 512]
+		self.volume_descriptor_sequence_number = to_uint32(buffer, start + 16)
+		self.partition_flags = to_uint16(buffer, start + 20)
+		self.partition_number = to_uint16(buffer, start + 22)
+		self.partition_contents = EntityID(EntityIdType.UDFIdentifier, buffer, start + 24)
+		self.partition_contents_use = buffer[start + 56 : start + 184]
+		self.access_type = to_uint32(buffer, start + 184)
+		self.partition_starting_location = to_uint32(buffer, start + 188)
+		self.partition_length = to_uint32(buffer, start + 192)
+		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, start + 196)
+		self.implementation_use = buffer[start + 228 : start + 356]
+		self.reserved = buffer[start + 356 : start + 512]
 
 		# If the partition has allocated volume space
 		if self.partition_flags == 1:
@@ -319,21 +319,21 @@ class LogicalVolumeDescriptor(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(LogicalVolumeDescriptor, self).__init__(512, buffer, start)
 
-		self.descriptor_tag = DescriptorTag(buffer)
+		self.descriptor_tag = DescriptorTag(buffer, start)
 		self._assert_tag_identifier(TagIdentifier.LogicalVolumeDescriptor)
 
-		self.volume_descriptor_sequence_number = to_uint32(buffer, 16)
-		self.descriptor_character_set = buffer[20 : 84] # FIXME: charspec
-		self.logical_volume_identifier = to_dstring(buffer, 84, 128)
-		self.logical_block_size = to_uint32(buffer, 128)
-		self.domain_identifier = EntityID(EntityIdType.DomainIdentifier, buffer, 216)
-		self.logical_volume_contents_use = buffer[248 : 264]
-		self.map_table_length = to_uint32(buffer, 264)
-		self.number_of_partition_maps = to_uint32(buffer, 268)
-		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, 272)
-		self.implementation_use = buffer[304 : 432]
-		self.integrity_sequence_extent = ExtentDescriptor(buffer, 432)
-		self._raw_partition_maps = buffer[440 : 512]
+		self.volume_descriptor_sequence_number = to_uint32(buffer, start + 16)
+		self.descriptor_character_set = buffer[start + 20 : start + 84] # FIXME: charspec
+		self.logical_volume_identifier = to_dstring(buffer, start + 84, 128)
+		self.logical_block_size = to_uint32(buffer, start + 128)
+		self.domain_identifier = EntityID(EntityIdType.DomainIdentifier, buffer, start + 216)
+		self.logical_volume_contents_use = buffer[start + 248 : start + 264]
+		self.map_table_length = to_uint32(buffer, start + 264)
+		self.number_of_partition_maps = to_uint32(buffer, start + 268)
+		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, start + 272)
+		self.implementation_use = buffer[start + 304 : start + 432]
+		self.integrity_sequence_extent = ExtentDescriptor(buffer, start + 432)
+		self._raw_partition_maps = buffer[start + 440 : start + 512]
 
 		if not "*OSTA UDF Compliant" in self.domain_identifier.identifier:
 			raise Exception("Logical Volume is not OSTA compliant")
@@ -368,17 +368,17 @@ class LongAllocationDescriptor(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(LongAllocationDescriptor, self).__init__(16, buffer, start)
 
-		self.extent_length = to_uint32(buffer, 0)
-		self.extent_location = LogicalBlockAddress(buffer, 4)
-		self.implementation_use = buffer[10 : 16]
+		self.extent_length = to_uint32(buffer, start + 0)
+		self.extent_location = LogicalBlockAddress(buffer, start + 4)
+		self.implementation_use = buffer[start + 10 : start + 16]
 
 
 # page 4/3 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 class LogicalBlockAddress(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(LogicalBlockAddress, self).__init__(6, buffer, start)
-		self.logical_block_number = to_uint32(buffer, 0)
-		self.partition_reference_number = to_uint16(buffer, 4)
+		self.logical_block_number = to_uint32(buffer, start + 0)
+		self.partition_reference_number = to_uint16(buffer, start + 4)
 
 
 class TerminatingDescriptor(BaseTag):
@@ -419,20 +419,6 @@ class Type2PartitionMap(BaseTag):
 
 		if not self.partition_map_length == self.size:
 			raise Exception("Type 2 Partition Map Length was {0} instead of {1}.".format(self.partition_map_length, self.size))
-
-
-def read_extent(file, logical_partitions, extent):
-	logical_partition = logical_partitions[extent.extent_location.partition_reference_number]
-	offset = logical_partition.physical_partition._start
-	start = extent.extent_location.logical_block_number * logical_partition.logical_block_size
-	length = extent.extent_length
-	#print('offset', offset) # 544768
-	#print('start', start) # 544768
-	#print('length', length) # 4096
-	file.seek(offset + start)
-	retval = file.read(length)
-	#print('file.tell()', file.tell())
-	return retval
 
 
 # FIXME: This assumes the sector size is 2048
@@ -592,8 +578,6 @@ def go(file, file_size, sector_size):
 
 	# Get all the logical partitions
 	for map in logical_volume_descriptor.partition_maps:
-		print(map.partition_map_type)
-
 		if isinstance(map, Type1PartitionMap):
 			partition_number = map.partition_number
 			physical_Partition = physical_partitions[partition_number]
@@ -608,11 +592,11 @@ def go(file, file_size, sector_size):
 	try:
 		tag = DescriptorTag(extent_buffer)
 	except:
-		pass
+		raise Exception("Failed to get Descriptor Tag from Partition Extent.")
 
 	# Get the root file set descriptor
 	file_set_descriptor = FileSetDescriptor(extent_buffer)
-
+	root_directory = directory_from_descriptor(file, logical_partitions, file_set_descriptor)
 
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
