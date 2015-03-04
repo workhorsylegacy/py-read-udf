@@ -599,6 +599,25 @@ def go(file, file_size, sector_size):
 	root_directory = directory_from_descriptor(file, logical_partitions, file_set_descriptor)
 
 
+def directory_from_descriptor(file, logical_partitions, file_set_descriptor):
+
+	icb = file_set_descriptor.root_directory_icb
+	print(icb.extent_location.partition_reference_number)
+	exit()
+	logical_partition = logical_partitions[icb.extent_location.partition_reference_number]
+	read_extent(file, logical_partitions, icb)
+
+
+def read_extent(file, logical_partitions, extent):
+	logical_partition = logical_partitions[extent.extent_location.partition_reference_number]
+	offset = logical_partition.physical_partition._start
+	start = extent.extent_location.logical_block_number * logical_partition.logical_block_size
+	length = extent.extent_length
+	file.seek(offset + start)
+	retval = file.read(length)
+	return retval
+
+
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
 file_size = os.path.getsize(game_file)
 f = open(game_file, 'rb')
