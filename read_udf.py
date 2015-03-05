@@ -52,6 +52,17 @@ def to_uint32(buffer, start = 0):
 	d = ((to_uint8(buffer[start + 0]) << 0) & 0x000000FF)
 	return(a | b | c | d)
 
+def to_uint64(buffer, start = 0):
+	a = ((to_uint8(buffer[start + 7]) << 56) & 0xFF00000000000000)
+	b = ((to_uint8(buffer[start + 6]) << 48) & 0x00FF000000000000)
+	c = ((to_uint8(buffer[start + 5]) << 40) & 0x0000FF0000000000)
+	d = ((to_uint8(buffer[start + 4]) << 32) & 0x000000FF00000000)
+	e = ((to_uint8(buffer[start + 3]) << 24) & 0x00000000FF000000)
+	f = ((to_uint8(buffer[start + 2]) << 16) & 0x0000000000FF0000)
+	g = ((to_uint8(buffer[start + 1]) << 8) & 0x000000000000FF00)
+	h = ((to_uint8(buffer[start + 0]) << 0) & 0x00000000000000FF)
+	return(a | b | c | d | e | f | g | h)
+
 
 class BaseTag(object):
 	def __init__(self, size, buffer, start):
@@ -104,7 +115,7 @@ class EntityIdType(object): # enum
 	ApplicationIdentifier = 4
 
 
-# page 15 of http://www.osta.org/specs/pdf/udf260.pdf
+# page 14 of http://www.osta.org/specs/pdf/udf260.pdf
 # 1/12 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
 class EntityID(BaseTag):
 	def __init__(self, entity_id_type, buffer, start):
@@ -138,6 +149,7 @@ class TagIdentifier(object): # enum
 	TerminatingDescriptor = 8
 	LogicalVolumeIntegrityDescriptor = 9
 	FileSetDescriptor = 256
+	FileEntry = 261
 
 
 # page 3/3 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
@@ -325,7 +337,7 @@ class LogicalVolumeDescriptor(BaseTag):
 		self.volume_descriptor_sequence_number = to_uint32(buffer, start + 16)
 		self.descriptor_character_set = buffer[start + 20 : start + 84] # FIXME: charspec
 		self.logical_volume_identifier = to_dstring(buffer, start + 84, 128)
-		self.logical_block_size = to_uint32(buffer, start + 128)
+		self.logical_block_size = to_uint32(buffer, start + 212)
 		self.domain_identifier = EntityID(EntityIdType.DomainIdentifier, buffer, start + 216)
 		self.logical_volume_contents_use = buffer[start + 248 : start + 264]
 		self.map_table_length = to_uint32(buffer, start + 264)
@@ -421,6 +433,77 @@ class Type2PartitionMap(BaseTag):
 			raise Exception("Type 2 Partition Map Length was {0} instead of {1}.".format(self.partition_map_length, self.size))
 
 
+# page 4/28 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+# page 56 of http://www.osta.org/specs/pdf/udf260.pdf
+class FileEntry(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(FileEntry, self).__init__(300, buffer, start) # FIXME: How do we deal with this having a dynamic size?
+
+		self.descriptor_tag = DescriptorTag(buffer, start)
+		self._assert_tag_identifier(TagIdentifier.FileEntry)
+
+		self.icb_tag = ICBTag(buffer, start + 16)
+		self.uid = to_uint32(buffer, start + 36)
+		self.gid = to_uint32(buffer, start + 40)
+		self.permissions = to_uint32(buffer, start + 44)
+		self.file_link_count = to_uint16(buffer, start + 48)
+		self.record_format = to_uint8(buffer[start + 50])
+		self.record_display_attributes = to_uint8(buffer[start + 51])
+		self.record_length = to_uint32(buffer, start + 52)
+		self.information_length = to_uint64(buffer, start + 56)
+		self.logical_blocks_recorded = to_uint64(buffer, start + 64)
+		self.access_date_and_time = buffer[start + 72 : start + 84] # FIXME: timestamp
+		self.modification_date_and_time = buffer[start + 84 : start + 96] # FIXME: timestamp
+		self.attribute_date_and_time = buffer[start + 96 : start + 108] # FIXME: timestamp
+		self.checkpoint = to_uint32(buffer, start + 108)
+		self.extended_attribute_icb = LongAllocationDescriptor(buffer, start + 112)
+		self.implementation_identifier = EntityID(EntityIdType.ImplementationIdentifier, buffer, start + 128)
+		self.uinque_id = to_uint64(buffer, start + 160)
+		self.length_of_extended_attributes = to_uint32(buffer, start + 168)
+		self.length_of_allocation_descriptors = to_uint32(buffer, start + 173)
+		self.extended_attributes = buffer[start + 176 : start + 176 + self.length_of_extended_attributes]
+		self.allocation_descriptors = buffer[start + 176 + self.length_of_extended_attributes : start + 176 + self.length_of_extended_attributes + self.length_of_allocation_descriptors]
+
+
+# page 4/23 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class ICBTag(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(ICBTag, self).__init__(20, buffer, start)
+
+		self.prior_recorded_number_of_direct_entries = to_uint32(buffer, start)
+		self.strategy_type = to_uint16(buffer, start + 4)
+		self.strategy_parameter = buffer[start + 6 : start + 2]
+		self.maximum_number_of_entries = to_uint16(buffer, start + 8)
+		self.reserved = buffer[start + 10: start + 11]
+		self.file_type = to_uint8(buffer[start + 11])
+		self.parent_icb_location = LogicalBlockAddress(buffer, start + 12)
+		self.flags = to_uint16(buffer, start + 18)
+
+		self._assert_reserve_space(buffer, start + 10, 1)
+
+
+def directory_from_descriptor(file, logical_partitions, file_set_descriptor):
+	icb = file_set_descriptor.root_directory_icb
+	logical_partition = logical_partitions[icb.extent_location.partition_reference_number]
+	buffer = read_extent(file, logical_partitions, icb)
+	dt = DescriptorTag(buffer)
+	if dt.tag_identifier == TagIdentifier.FileEntry:
+		file_entry = FileEntry(buffer)
+		raise Exception("FIXME: Handle file stuff here")
+	else:
+		raise NotImplementedError("FIXME: Add the code for handling Tag Identifier {0}".format(dt.tag_identifier))
+
+
+def read_extent(file, logical_partitions, extent):
+	logical_partition = logical_partitions[extent.extent_location.partition_reference_number]
+	offset = logical_partition.physical_partition._start
+	start = extent.extent_location.logical_block_number * logical_partition.logical_block_size
+	length = extent.extent_length
+	file.seek(offset + start)
+	retval = file.read(length)
+	return retval
+
+
 # FIXME: This assumes the sector size is 2048
 def is_valid_udf(file, file_size):
 	# Move to the start of the file
@@ -462,6 +545,7 @@ def is_valid_udf(file, file_size):
 
 	return has_bea and has_vsd and has_tea
 
+
 def get_sector_size(file, file_size):
 	sizes = [4096, 2048, 1024, 512]
 	for size in sizes:
@@ -493,6 +577,7 @@ def get_sector_size(file, file_size):
 		return size
 
 	raise Exception("Could not get sector size.")
+
 
 def go(file, file_size, sector_size):
 	if file_size < 257 * sector_size:
@@ -594,28 +679,9 @@ def go(file, file_size, sector_size):
 	except:
 		raise Exception("Failed to get Descriptor Tag from Partition Extent.")
 
-	# Get the root file set descriptor
+	# Get the root file information
 	file_set_descriptor = FileSetDescriptor(extent_buffer)
 	root_directory = directory_from_descriptor(file, logical_partitions, file_set_descriptor)
-
-
-def directory_from_descriptor(file, logical_partitions, file_set_descriptor):
-
-	icb = file_set_descriptor.root_directory_icb
-	print(icb.extent_location.partition_reference_number)
-	exit()
-	logical_partition = logical_partitions[icb.extent_location.partition_reference_number]
-	read_extent(file, logical_partitions, icb)
-
-
-def read_extent(file, logical_partitions, extent):
-	logical_partition = logical_partitions[extent.extent_location.partition_reference_number]
-	offset = logical_partition.physical_partition._start
-	start = extent.extent_location.logical_block_number * logical_partition.logical_block_size
-	length = extent.extent_length
-	file.seek(offset + start)
-	retval = file.read(length)
-	return retval
 
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
