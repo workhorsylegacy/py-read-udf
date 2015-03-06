@@ -148,6 +148,14 @@ class BaseTag(object):
 				raise Exception("Reserve space at {0} was not zero.".format(start))
 
 
+class UdfContext(object):
+	def __init__(self, file, physical_sector_size):
+		self.file = file
+		self.logical_partitions = []
+		self.physical_partitions = {}
+		self.physical_sector_size = physical_sector_size
+
+
 # "2.1.5 Entity Identifier" of http://www.osta.org/specs/pdf/udf260.pdf
 class EntityIdType(object): # enum
 	unknown = 0
@@ -167,10 +175,6 @@ class EntityID(BaseTag):
 		self.flags = to_uint8(buffer[start + 0])
 		self.identifier = buffer[start + 1 : start + 24]
 		self.identifier_suffix = buffer[start + 24 : start + 32]
-
-		#print('self.flags', self.flags)
-		#print('self.identifier', self.identifier)
-		#print('self.identifier_suffix', self.identifier_suffix)
 
 		# Make sure the flag is always 0
 		#if self.flags != 0:
@@ -365,14 +369,7 @@ class PartitionDescriptor(BaseTag):
 		# If the partition has allocated volume space
 		if self.partition_flags == 1:
 			pass
-		'''
-		print('self.volume_descriptor_sequence_number', self.volume_descriptor_sequence_number)
-		print('self.partition_flags', self.partition_flags)
-		print('self.partition_number', self.partition_number)
-		print('self.partition_contents', self.partition_contents)
-		print('self.partition_contents_use', self.partition_contents_use)
-		print('self.partition_starting_location', self.partition_starting_location)
-		'''
+
 		self._assert_reserve_space(buffer, start + 356, 156)
 
 
@@ -650,9 +647,6 @@ class FileContentBuffer(object):
 				part = self.partition
 
 			new_pos = extent.start_pos + extent_offset + part.physical_partition._start
-			print('new_pos', new_pos)
-			print('to_read', to_read)
-			#exit()
 			part.physical_partition._file.seek(new_pos)
 			buffer = part.physical_partition._file.read(to_read)
 			if len(buffer) == 0:
@@ -839,20 +833,26 @@ def get_sector_size(file, file_size):
 		# Got the correct size
 		return size
 
-	raise Exception("Could not get sector size.")
+	raise Exception("Could not get file sector size.")
 
 
-class UdfContext(object):
-	def __init__(self, file, physical_sector_size):
-		self.file = file
-		self.logical_partitions = []
-		self.physical_partitions = {}
-		self.physical_sector_size = physical_sector_size
+def read_udf_file(file_name):
+	# Make sure the file exists
+	if not os.path.isfile(file_name):
+		raise Exception("No such file '{0}'".format(file_name))
 
+	# Open the file
+	file_size = os.path.getsize(file_name)
+	file = open(game_file, 'rb')
 
-def go(file, file_size, sector_size):
+	# Make sure the file is valid UDF
+	if not is_valid_udf(file, file_size):
+		raise Exception("Is not a valid UDF file '{0}'".format(file_name))
+
+	# Make sure the file can fit all the sectors
+	sector_size = get_sector_size(file, file_size)
 	if file_size < 257 * sector_size:
-		return
+		raise Exception("File is too small to hold all sectors '{0}'".format(file_name))
 
 	# "5.2 UDF Volume Structure and Mount Procedure" of https://sites.google.com/site/udfintro/
 	# Read the Anchor VD Pointer
@@ -862,7 +862,7 @@ def go(file, file_size, sector_size):
 	buffer = file.read(512)
 	tag = DescriptorTag(buffer[0 : 16])
 	if not tag.tag_identifier == TagIdentifier.AnchorVolumeDescriptorPointer:
-		exit(1)
+		raise Exception("The last sector was supposed to be an Archive Volume Descriptor, but was not.")
 	avdp = AnchorVolumeDescriptorPointer(buffer)
 	
 	# Get the location of the primary volume descriptor
@@ -887,20 +887,14 @@ def go(file, file_size, sector_size):
 		# Move back to the start of the sector
 		file.seek(sector * sector_size)
 		buffer = file.read(512)
-		
-		#print('tag.tag_identifier', tag.tag_identifier)
 
 		if tag.tag_identifier == TagIdentifier.PrimaryVolumeDescriptor:
-			#print(sector, 'PrimaryVolumeDescriptor')
 			desc = PrimaryVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.AnchorVolumeDescriptorPointer:
-			#print(sector, 'AnchorVolumeDescriptorPointer')
 			anchor = AnchorVolumeDescriptorPointer(buffer)
 		elif tag.tag_identifier == TagIdentifier.VolumeDescriptorPointer:
-			#print(sector, 'VolumeDescriptorPointer')
 			pass #VolumeDescriptorPointer(buffer)
 		elif tag.tag_identifier == TagIdentifier.ImplementationUseVolumeDescriptor:
-			#print(sector, 'ImplementationUseVolumeDescriptor')
 			pass #ImplementationUseVolumeDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.PartitionDescriptor:
 			partition_descriptor = PartitionDescriptor(buffer)
@@ -908,18 +902,13 @@ def go(file, file_size, sector_size):
 			length = partition_descriptor.partition_length * sector_size
 			physical_partition = PhysicalPartition(file, start, length)
 			context.physical_partitions[partition_descriptor.partition_number] = physical_partition
-			print(sector, 'PartitionDescriptor')
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
 			logical_volume_descriptor = LogicalVolumeDescriptor(buffer)
-			print(sector, 'LogicalVolumeDescriptor')
 		elif tag.tag_identifier == TagIdentifier.UnallocatedSpaceDescriptor:
-			#print(sector, 'UnallocatedSpaceDescriptor')
 			pass #UnallocatedSpaceDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.TerminatingDescriptor:
-			print(sector, 'TerminatingDescriptor')
 			terminating_descriptor = TerminatingDescriptor(buffer)
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeIntegrityDescriptor:
-			#print(sector, 'LogicalVolumeIntegrityDescriptor')
 			pass #LogicalVolumeIntegrityDescriptor(buffer)
 		elif tag.tag_identifier != 0:
 			raise NotImplementedError("Unexpected Descriptor Tag :{0}".format(tag.tag_identifier))
@@ -928,8 +917,14 @@ def go(file, file_size, sector_size):
 			break
 
 	# Make sure we have all the segments we need
-	if not logical_volume_descriptor or not partition_descriptor or not terminating_descriptor:
-		raise Exception("Failed to get the required segments")
+	if not logical_volume_descriptor:
+		raise Exception("File is missing a Logical Volume Descriptor sector.")
+
+	if not partition_descriptor:
+		raise Exception("File is missing a Partition Descriptor sector.")
+
+	if not terminating_descriptor:
+		raise Exception("File is missing a Terminating Descriptor sector.")
 
 	# Get all the logical partitions
 	for i in range(len(logical_volume_descriptor.partition_maps)):
@@ -947,17 +942,12 @@ def go(file, file_size, sector_size):
 	# Get the root file information from the extent
 	file_set_descriptor = FileSetDescriptor(fsd_buffer)
 	root_directory = File.from_descriptor(context, file_set_descriptor.root_directory_icb)
-	for entry in root_directory.all_entries:
-		print("file name: {0}".format(entry.file_identifier))
-	print(root_directory)
+	return root_directory
 
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
-file_size = os.path.getsize(game_file)
-f = open(game_file, 'rb')
-print('is_valid_udf', is_valid_udf(f, file_size))
-sector_size = get_sector_size(f, file_size)
-print('sector_size', sector_size)
-go(f, file_size, sector_size)
+root_directory = read_udf_file(game_file)
+for entry in root_directory.all_entries:
+	print("file name: {0}".format(entry.file_identifier))
 
 
