@@ -2,6 +2,7 @@
 # -*- coding: UTF-8 -*-
 
 # Copyright (c) 2015, Matthew Brennan Jones <matthew.brennan.jones@gmail.com>
+# Copyright (c) 2008-2011, Kenneth Bell https://discutils.codeplex.com
 # A module for reading DVD ISOs (Universal Disk Format) with Python 2 & 3
 # See Universal Disk Format (ISO/IEC 13346 and ECMA-167) for details
 # http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
@@ -465,7 +466,26 @@ class FileEntry(BaseTag):
 		self.allocation_descriptors = buffer[start + 176 + self.length_of_extended_attributes : start + 176 + self.length_of_extended_attributes + self.length_of_allocation_descriptors]
 
 
+# page 4/25 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class FileType(object): # enum
+	unknown = 0
+	unallocated_space_entry = 1
+	partition_integrity_entry = 2
+	indirect_entry = 3
+	directory = 4
+	sequence_of_bytes = 5
+	block_special_device_file = 6
+	character_special_device_file = 7
+	recording_extended_attributes = 8
+	fifo = 9
+	c_issock = 10
+	terminal_entry = 11
+	symbolic_link = 12
+	stream_directory = 13
+
+
 # page 4/23 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+# "2.3.5 ICB Tag" of http://www.osta.org/specs/pdf/udf260.pdf
 class ICBTag(BaseTag):
 	def __init__(self, buffer, start = 0):
 		super(ICBTag, self).__init__(20, buffer, start)
@@ -477,30 +497,178 @@ class ICBTag(BaseTag):
 		self.reserved = buffer[start + 10: start + 11]
 		self.file_type = to_uint8(buffer[start + 11])
 		self.parent_icb_location = LogicalBlockAddress(buffer, start + 12)
-		self.flags = to_uint16(buffer, start + 18)
+		raw_flags = to_uint16(buffer, start + 18)
+		self.allocation_type = raw_flags & 0x3
+		self.flags = raw_flags & 0xFFFC
 
 		self._assert_reserve_space(buffer, start + 10, 1)
 
 
-def directory_from_descriptor(file, logical_partitions, file_set_descriptor):
+class CookedExtent(object):
+	def __init__(self, file_content_offset, partition, start_pos, length):
+		self.file_content_offset = file_content_offset
+		self.partition = partition
+		self.start_pos = start_pos
+		self.length = length
+
+
+class ShortAllocationDescriptor(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(ShortAllocationDescriptor, self).__init__(8, buffer, start)
+		length = to_uint32(buffer, start)
+		self.extent_location = to_uint32(buffer, start + 4)
+		self.extent_length = length & 0x3FFFFFFF
+		self.flags = (length >> 30) & 0x3
+
+
+class AllocationType(object): # enum
+	short_descriptors = 0
+	long_descriptors = 1
+	extended_descriptors = 2
+	embedded = 3
+
+
+class FileContentBuffer(object):
+	def __init__(self, context, partition, file_entry, block_size):
+		self.context = context
+		self.partition = partition
+		self.file_entry = file_entry
+		self.block_size = block_size
+		self.extents = None
+
+		self.load_extents()
+
+	def load_extents(self):
+		self.extents = []
+		active_buffer = self.file_entry.allocation_descriptors
+
+		# Short descriptors
+		alloc_type = self.file_entry.icb_tag.allocation_type
+		if alloc_type == AllocationType.short_descriptors:
+			file_pos = 0
+			i = 0
+			while i < len(active_buffer):
+				sad = ShortAllocationDescriptor(active_buffer, i)
+				if sad.extent_length == 0:
+					break
+				if sad.flags != 0:
+					raise NotImplementedError("Can't use extents that are not recorded and allocated.")
+
+				new_extent = CookedExtent(file_pos, sys.maxint, sad.extent_location * self.block_size, sad.extent_length)
+				self.extents.append(new_extent)
+				file_pos += sad.extent_length
+				i += sad.size
+		elif alloc_type == AllocationType.embedded:
+			raise NotImplementedError()
+		elif alloc_type == AllocationType.long_descriptors:
+			raise NotImplementedError()
+		else:
+			raise NotImplementedError("FIXME: Add support for allocation type {0}".format(alloc_type))
+
+	def get_capacity(self):
+		return self.file_entry.information_length
+	capacity = property(get_capacity)
+
+	def read(self, pos, offset, count):
+		buffer = []
+		if self.file_entry.icb_tag.allocation_type == AllocationType.embedded:
+			src_buffer = self.file_entry.allocation_descriptors
+			if pos > len(src_buffer):
+				return buffer
+
+			to_copy = min(len(src_buffer) - pos, count)
+			buffer[offset : offset + to_copy] = src_buffer[pos : pos + to_copy]
+			return buffer
+		else:
+			return self.read_from_extents(pos, offset, count)
+
+	def read_from_extents(self, pos, offset, count):
+		total_to_read = min(self.capacity - pos, count)
+		total_read = 0
+		buffer = []
+
+		while total_read < total_to_read:
+			extent = self.find_extent(pos + total_read)
+
+			extent_offset = (pos + total_read) - extent.file_content_offset
+			to_read = min(total_to_read - total_read, extent.length - extent_offset)
+
+			part = None
+			if extent.partition != sys.maxint:
+				part = self.logical_partitions[extent.partition]
+			else:
+				part = self.partition
+
+			new_pos = extent.start_pos + extent_offset + part.physical_partition._start
+			print('new_pos', new_pos)
+			print('to_read', to_read)
+			#exit()
+			part.physical_partition._file.seek(new_pos)
+			buffer = part.physical_partition._file.read(to_read)
+			if len(buffer) == 0:
+				return buffer
+
+			total_read += len(buffer)
+
+		return buffer
+
+	def find_extent(self, pos):
+		for extent in self.extents:
+			if extent.file_content_offset + extent.length > pos:
+				return extent
+
+		return None
+
+
+class File(object):
+	def __init__(self, context, partition, file_entry, block_size):
+		self.context = context
+		self.partition = partition
+		self.file_entry = file_entry
+		self.block_size = block_size
+		self.content = None
+
+	def get_file_content(self):
+		if self.content:
+			return self.content
+
+		self.content = FileContentBuffer(self.context, self.partition, self.file_entry, self.block_size)
+		return self.content
+	file_content = property(get_file_content)
+
+
+class Directory(File):
+	def __init__(self, context, partition, file_entry):
+		super(Directory, self).__init__(context, partition, file_entry, partition.logical_block_size)
+		if self.file_content.capacity > sys.maxint:
+			raise NotImplementedError("Directory too big")
+
+		self.entries = []
+		content_bytes = self.file_content.read(0, 0, self.file_content.capacity)
+
+
+def directory_from_descriptor(context, file_set_descriptor):
 	icb = file_set_descriptor.root_directory_icb
-	logical_partition = logical_partitions[icb.extent_location.partition_reference_number]
-	buffer = read_extent(file, logical_partitions, icb)
+	logical_partition = context.logical_partitions[icb.extent_location.partition_reference_number]
+	buffer = read_extent(context, icb)
 	dt = DescriptorTag(buffer)
 	if dt.tag_identifier == TagIdentifier.FileEntry:
 		file_entry = FileEntry(buffer)
-		raise Exception("FIXME: Handle file stuff here")
+		if file_entry.icb_tag.file_type == FileType.directory:
+			Directory(context, logical_partition, file_entry)
+		else:
+			raise NotImplementedError("FIXME: Expected a directory not a FileType of {0}".format(file_entry.icb_tag.file_type))
 	else:
 		raise NotImplementedError("FIXME: Add the code for handling Tag Identifier {0}".format(dt.tag_identifier))
 
 
-def read_extent(file, logical_partitions, extent):
-	logical_partition = logical_partitions[extent.extent_location.partition_reference_number]
+def read_extent(context, extent):
+	logical_partition = context.logical_partitions[extent.extent_location.partition_reference_number]
 	offset = logical_partition.physical_partition._start
 	start = extent.extent_location.logical_block_number * logical_partition.logical_block_size
 	length = extent.extent_length
-	file.seek(offset + start)
-	retval = file.read(length)
+	context.file.seek(offset + start)
+	retval = context.file.read(length)
 	return retval
 
 
@@ -579,12 +747,21 @@ def get_sector_size(file, file_size):
 	raise Exception("Could not get sector size.")
 
 
+class UdfContext(object):
+	def __init__(self, file, physical_sector_size):
+		self.file = file
+		self.logical_partitions = []
+		self.physical_partitions = {}
+		self.physical_sector_size = physical_sector_size
+
+
 def go(file, file_size, sector_size):
 	if file_size < 257 * sector_size:
 		return
 
 	# "5.2 UDF Volume Structure and Mount Procedure" of https://sites.google.com/site/udfintro/
 	# Read the Anchor VD Pointer
+	context = UdfContext(file, sector_size)
 	sector = 256
 	file.seek(sector * sector_size)
 	buffer = file.read(512)
@@ -599,8 +776,6 @@ def go(file, file_size, sector_size):
 	# Look through all the sectors and find the partition descriptor
 	logical_volume_descriptor = None
 	terminating_descriptor = None
-	physical_partitions = {}
-	logical_partitions = []
 	for sector in range(pvd_sector, 257):
 		# Move to the sector start
 		file.seek(sector * sector_size)
@@ -637,7 +812,7 @@ def go(file, file_size, sector_size):
 			start = partition_descriptor.partition_starting_location * sector_size
 			length = partition_descriptor.partition_length * sector_size
 			physical_partition = PhysicalPartition(file, start, length)
-			physical_partitions[partition_descriptor.partition_number] = physical_partition
+			context.physical_partitions[partition_descriptor.partition_number] = physical_partition
 			print(sector, 'PartitionDescriptor')
 		elif tag.tag_identifier == TagIdentifier.LogicalVolumeDescriptor:
 			logical_volume_descriptor = LogicalVolumeDescriptor(buffer)
@@ -665,23 +840,23 @@ def go(file, file_size, sector_size):
 	for map in logical_volume_descriptor.partition_maps:
 		if isinstance(map, Type1PartitionMap):
 			partition_number = map.partition_number
-			physical_Partition = physical_partitions[partition_number]
-			partition = Type1Partition(logical_volume_descriptor, map, physical_Partition)
-			logical_partitions.append(partition)
+			physical_partition = context.physical_partitions[partition_number]
+			partition = Type1Partition(logical_volume_descriptor, map, physical_partition)
+			context.logical_partitions.append(partition)
 		elif isinstance(map, Type2PartitionMap):
 			raise NotImplementedError("FIXME: Add support for Type 2 Partitions.")
 
 	# Get the extent from the partition
-	extent_buffer = read_extent(file, logical_partitions, logical_volume_descriptor.file_set_descriptor_location)
+	extent_buffer = read_extent(context, logical_volume_descriptor.file_set_descriptor_location)
 	tag = None
 	try:
 		tag = DescriptorTag(extent_buffer)
 	except:
 		raise Exception("Failed to get Descriptor Tag from Partition Extent.")
 
-	# Get the root file information
+	# Get the root file information from the extent
 	file_set_descriptor = FileSetDescriptor(extent_buffer)
-	root_directory = directory_from_descriptor(file, logical_partitions, file_set_descriptor)
+	root_directory = directory_from_descriptor(context, file_set_descriptor)
 
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
