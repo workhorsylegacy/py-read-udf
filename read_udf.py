@@ -4,13 +4,14 @@
 # Copyright (c) 2015, Matthew Brennan Jones <matthew.brennan.jones@gmail.com>
 # Copyright (c) 2008-2011, Kenneth Bell https://discutils.codeplex.com
 # A module for reading DVD ISOs (Universal Disk Format) with Python 2 & 3
-# See Universal Disk Format (ISO/IEC 13346 and ECMA-167) for details
-# http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
-# http://www.osta.org/specs/pdf/udf260.pdf
-# http://en.wikipedia.org/wiki/Universal_Disk_Format
-# See Universal Disk Format (ISO/IEC 13346 and ECMA-167) for details
 # It uses a MIT style license
 # It is hosted at: https://github.com/workhorsy/py-read-udf2
+#
+# See ECMA-167 and OSTA Universal Disk Format for details:
+# http://en.wikipedia.org/wiki/Universal_Disk_Format
+# https://sites.google.com/site/udfintro/
+# http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+# http://www.osta.org/specs/pdf/udf260.pdf
 # 
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files (the
@@ -945,9 +946,10 @@ def read_udf_file(file_name):
 	return root_directory
 
 
-game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
-root_directory = read_udf_file(game_file)
-for entry in root_directory.all_entries:
-	print("file name: {0}".format(entry.file_identifier))
+if __name__ == '__main__':
+	game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
+	root_directory = read_udf_file(game_file)
+	for entry in root_directory.all_entries:
+		print("file name: {0}".format(entry.file_identifier))
 
 
