@@ -217,14 +217,32 @@ class PhysicalPartition(object):
 		self._length = length
 
 
-class Type1Partition(object):
-	def __init__(self, logical_volume_descriptor, partition_map, physical_partition):
-		self.logical_volume_descriptor = logical_volume_descriptor
-		self.partition_map = partition_map
-		self.physical_partition = physical_partition
+class LogicalPartition(object):
+	def __init__(self, context, volume_descriptor):
+		self.context = context
+		self.volume_descriptor = volume_descriptor
 
 	def get_logical_block_size(self):
-		return self.logical_volume_descriptor.logical_block_size
+		return self._volume_descriptor.logical_block_size
+	logical_block_size = property(get_logical_block_size)
+
+	@classmethod
+	def from_descriptor(cls, context, volume_descriptor, index):
+		map = volume_descriptor.partition_maps[index]
+		if isinstance(map, Type1PartitionMap):
+			return Type1Partition(context, volume_descriptor, map)
+		else:
+			raise NotImplementedError("Unrecognised type of partition map {0}".format(type(map)))
+
+
+class Type1Partition(LogicalPartition):
+	def __init__(self, context, volume_descriptor, partition_map):
+		super(Type1Partition, self).__init__(context, volume_descriptor)
+		self.partition_map = partition_map
+		self.physical_partition = context.physical_partitions[partition_map.partition_number]
+
+	def get_logical_block_size(self):
+		return self.volume_descriptor.logical_block_size
 	logical_block_size = property(get_logical_block_size)
 
 
@@ -663,11 +681,11 @@ def directory_from_descriptor(context, file_set_descriptor):
 
 
 def read_extent(context, extent):
-	logical_partition = context.logical_partitions[extent.extent_location.partition_reference_number]
-	offset = logical_partition.physical_partition._start
-	start = extent.extent_location.logical_block_number * logical_partition.logical_block_size
+	partition = context.logical_partitions[extent.extent_location.partition_reference_number]
+	offset = partition.physical_partition._start
+	pos = extent.extent_location.logical_block_number * partition.logical_block_size
 	length = extent.extent_length
-	context.file.seek(offset + start)
+	context.file.seek(offset + pos)
 	retval = context.file.read(length)
 	return retval
 
@@ -827,7 +845,7 @@ def go(file, file_size, sector_size):
 			#print(sector, 'LogicalVolumeIntegrityDescriptor')
 			pass #LogicalVolumeIntegrityDescriptor(buffer)
 		elif tag.tag_identifier != 0:
-			print("Unexpected Descriptor Tag :{0}".format(tag.tag_identifier))
+			raise NotImplementedError("Unexpected Descriptor Tag :{0}".format(tag.tag_identifier))
 
 		if logical_volume_descriptor and partition_descriptor and terminating_descriptor:
 			break
@@ -837,14 +855,9 @@ def go(file, file_size, sector_size):
 		raise Exception("Failed to get the required segments")
 
 	# Get all the logical partitions
-	for map in logical_volume_descriptor.partition_maps:
-		if isinstance(map, Type1PartitionMap):
-			partition_number = map.partition_number
-			physical_partition = context.physical_partitions[partition_number]
-			partition = Type1Partition(logical_volume_descriptor, map, physical_partition)
-			context.logical_partitions.append(partition)
-		elif isinstance(map, Type2PartitionMap):
-			raise NotImplementedError("FIXME: Add support for Type 2 Partitions.")
+	for i in range(len(logical_volume_descriptor.partition_maps)):
+		context.logical_partitions.append(LogicalPartition.from_descriptor(context, logical_volume_descriptor, i))
+	fsdBuffer = read_extent(context, logical_volume_descriptor.file_set_descriptor_location)
 
 	# Get the extent from the partition
 	extent_buffer = read_extent(context, logical_volume_descriptor.file_set_descriptor_location)
