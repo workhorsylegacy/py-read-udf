@@ -64,6 +64,43 @@ def to_uint64(buffer, start = 0):
 	h = ((to_uint8(buffer[start + 0]) << 0) & 0x00000000000000FF)
 	return(a | b | c | d | e | f | g | h)
 
+def round_up(value, unit):
+	return ((value + (unit - 1)) / unit) * unit
+
+def to_dstring(buffer, offset, count):
+	byte_len = to_uint8(buffer[offset + count - 1])
+	return to_dchars(buffer, offset, byte_len)
+
+def to_dchars(buffer, offset, count):
+	if count == 0:
+		return ""
+
+	alg = to_uint8(buffer[offset])
+
+	if alg not in [8, 16]:
+		raise Exception("Corrupt compressed unicode string")
+
+	result = []
+
+	pos = 1
+	while pos < count:
+		ch = to_uint8("\0")
+
+		if alg == 16:
+			ch = (to_uint8(buffer[offset + pos]) << 8)
+			pos += 1
+
+		if pos < count:
+			ch |= to_uint8(buffer[offset + pos])
+			pos += 1
+
+		result.append(ch)
+
+	# Convert from ints to chars
+	result = [chr(n) for n in result]
+
+	return ''.join(result)
+
 
 class BaseTag(object):
 	def __init__(self, size, buffer, start):
@@ -77,6 +114,10 @@ class BaseTag(object):
 
 	# Make sure there is enough space
 	def _assert_size(self, buffer, start):
+		# Just return if the size is zero
+		if self._size == 0:
+			return
+
 		if len(buffer) - start < self._size:
 			raise Exception("{0} requires {1} bytes, but buffer only has {2}".format(type(self), self._size, len(buffer) - start))
 
@@ -89,7 +130,7 @@ class BaseTag(object):
 			checksum += to_uint8(buffer[start + i])
 
 		# Truncate int to uint8
-		while checksum > 256:
+		while checksum >= 256:
 			checksum -= 256
 
 		if not checksum == expected_checksum:
@@ -150,6 +191,7 @@ class TagIdentifier(object): # enum
 	TerminatingDescriptor = 8
 	LogicalVolumeIntegrityDescriptor = 9
 	FileSetDescriptor = 256
+	FileIdentifierDescriptor = 257
 	FileEntry = 261
 
 
@@ -198,16 +240,6 @@ class AnchorVolumeDescriptorPointer(BaseTag):
 		self.reserved = buffer[start + 32 : start + 512]
 
 		self._assert_reserve_space(buffer, start + 32, 480)
-
-
-# page 12 of http://www.osta.org/specs/pdf/udf260.pdf
-# page 1/10 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
-def to_dstring(buffer, start, max_length):
-	raw = buffer[start : start + max_length]
-	length = to_uint8(raw[0])
-	retval = raw[1 : 1 + length]
-	#print('dstring', retval)
-	return retval
 
 
 class PhysicalPartition(object):
@@ -646,6 +678,21 @@ class File(object):
 		self.block_size = block_size
 		self.content = None
 
+	@classmethod
+	def from_descriptor(cls, context, icb):
+		partition = context.logical_partitions[icb.extent_location.partition_reference_number]
+		root_data_dir = read_extent(context, icb)
+
+		dt = DescriptorTag(root_data_dir)
+		if dt.tag_identifier == TagIdentifier.FileEntry:
+			file_entry = FileEntry(root_data_dir)
+			if file_entry.icb_tag.file_type == FileType.directory:
+				return Directory(context, partition, file_entry)
+			else:
+				raise NotImplementedError("FIXME: Expected a directory not a FileType of {0}".format(file_entry.icb_tag.file_type))
+		else:
+			raise NotImplementedError("FIXME: Add the code for handling Tag Identifier {0}".format(dt.tag_identifier))
+
 	def get_file_content(self):
 		if self.content:
 			return self.content
@@ -655,29 +702,59 @@ class File(object):
 	file_content = property(get_file_content)
 
 
+class FileCharacteristic(object): # enum
+	existence = 0x01
+	directory = 0x02
+	deleted = 0x04
+	parent = 0x08
+	metadata = 0x10
+
+
+# page 4/21 of http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+class FileIdentifierDescriptor(BaseTag):
+	def __init__(self, buffer, start = 0):
+		super(FileIdentifierDescriptor, self).__init__(0, buffer, start)
+
+		self.rounded_size = 0
+
+		self.descriptor_tag = DescriptorTag(buffer, start)
+		self._assert_tag_identifier(TagIdentifier.FileIdentifierDescriptor)
+
+		self.file_version_number = to_uint16(buffer, start + 16)
+		self.file_characteristics = to_uint8(buffer[start + 18])
+		self.length_of_file_identifier = to_uint8(buffer[start + 19])
+		self.ICB = LongAllocationDescriptor(buffer, start + 20)
+		self.length_of_implementation_use = to_uint16(buffer, start + 36)
+		self.implementation_use = buffer[start + 38 : start + 38 + self.length_of_implementation_use]
+
+		s = start + 38 + self.length_of_implementation_use
+		l = self.length_of_file_identifier
+		self.file_identifier = to_dchars(buffer, s, l)
+
+		self.rounded_size = round_up(38 + self.length_of_implementation_use + self.length_of_file_identifier, 4)
+
+
 class Directory(File):
 	def __init__(self, context, partition, file_entry):
 		super(Directory, self).__init__(context, partition, file_entry, partition.logical_block_size)
 		if self.file_content.capacity > sys.maxint:
 			raise NotImplementedError("Directory too big")
 
-		self.entries = []
+		self._entries = []
 		content_bytes = self.file_content.read(0, 0, self.file_content.capacity)
 
+		pos = 0
+		while pos < len(content_bytes):
+			id = FileIdentifierDescriptor(content_bytes, pos)
 
-def directory_from_descriptor(context, file_set_descriptor):
-	icb = file_set_descriptor.root_directory_icb
-	logical_partition = context.logical_partitions[icb.extent_location.partition_reference_number]
-	buffer = read_extent(context, icb)
-	dt = DescriptorTag(buffer)
-	if dt.tag_identifier == TagIdentifier.FileEntry:
-		file_entry = FileEntry(buffer)
-		if file_entry.icb_tag.file_type == FileType.directory:
-			Directory(context, logical_partition, file_entry)
-		else:
-			raise NotImplementedError("FIXME: Expected a directory not a FileType of {0}".format(file_entry.icb_tag.file_type))
-	else:
-		raise NotImplementedError("FIXME: Add the code for handling Tag Identifier {0}".format(dt.tag_identifier))
+			if (id.file_characteristics & (FileCharacteristic.deleted | FileCharacteristic.parent)) == 0:
+				self._entries.append(id)
+
+			pos += id.rounded_size
+
+	def get_all_entries(self):
+		return self._entries
+	all_entries = property(get_all_entries)
 
 
 def read_extent(context, extent):
@@ -857,19 +934,22 @@ def go(file, file_size, sector_size):
 	# Get all the logical partitions
 	for i in range(len(logical_volume_descriptor.partition_maps)):
 		context.logical_partitions.append(LogicalPartition.from_descriptor(context, logical_volume_descriptor, i))
-	fsdBuffer = read_extent(context, logical_volume_descriptor.file_set_descriptor_location)
 
 	# Get the extent from the partition
-	extent_buffer = read_extent(context, logical_volume_descriptor.file_set_descriptor_location)
+	fsd_buffer = read_extent(context, logical_volume_descriptor.file_set_descriptor_location)
+
 	tag = None
 	try:
-		tag = DescriptorTag(extent_buffer)
+		tag = DescriptorTag(fsd_buffer)
 	except:
 		raise Exception("Failed to get Descriptor Tag from Partition Extent.")
 
 	# Get the root file information from the extent
-	file_set_descriptor = FileSetDescriptor(extent_buffer)
-	root_directory = directory_from_descriptor(context, file_set_descriptor)
+	file_set_descriptor = FileSetDescriptor(fsd_buffer)
+	root_directory = File.from_descriptor(context, file_set_descriptor.root_directory_icb)
+	for entry in root_directory.all_entries:
+		print("file name: {0}".format(entry.file_identifier))
+	print(root_directory)
 
 
 game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
