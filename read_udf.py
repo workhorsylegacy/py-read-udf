@@ -844,7 +844,7 @@ def read_udf_file(file_name):
 
 	# Open the file
 	file_size = os.path.getsize(file_name)
-	file = open(game_file, 'rb')
+	file = open(file_name, 'rb')
 
 	# Make sure the file is valid UDF
 	if not is_valid_udf(file, file_size):
