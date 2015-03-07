@@ -10,11 +10,11 @@ Example use:
 -----
 ~~~python
 
-	import read_udf
-	game_file = 'C:/games/Playstation2/Armored Core 3/Armored Core 3.iso'
-	root_directory = read_udf.read_udf_file(game_file)
-	for entry in root_directory.all_entries:
-		print("file name: {0}".format(entry.file_identifier))
+import read_udf
+game_file = 'C:/games/Playstation2/Armored Core 3/Armored Core 3.iso'
+root_directory = read_udf.read_udf_file(game_file)
+for entry in root_directory.all_entries:
+	print("file name: {0}".format(entry.file_identifier))
 
 ~~~
 
