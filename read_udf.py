@@ -946,10 +946,5 @@ def read_udf_file(file_name):
 	return root_directory
 
 
-if __name__ == '__main__':
-	game_file = 'C:/Users/matt/Desktop/ps2/Armored Core 3/Armored Core 3.iso'
-	root_directory = read_udf_file(game_file)
-	for entry in root_directory.all_entries:
-		print("file name: {0}".format(entry.file_identifier))
 
 
