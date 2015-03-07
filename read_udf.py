@@ -5,7 +5,7 @@
 # Copyright (c) 2008-2011, Kenneth Bell https://discutils.codeplex.com
 # A module for reading DVD ISOs (Universal Disk Format) with Python 2 & 3
 # It uses a MIT style license
-# It is hosted at: https://github.com/workhorsy/py-read-udf2
+# It is hosted at: https://github.com/workhorsy/py-read-udf
 #
 # See ECMA-167 and OSTA Universal Disk Format for details:
 # http://en.wikipedia.org/wiki/Universal_Disk_Format
