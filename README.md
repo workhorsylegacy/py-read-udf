@@ -26,8 +26,11 @@ https://discutils.codeplex.com
 See ECMA-167 and OSTA Universal Disk Format for details:
 
 http://en.wikipedia.org/wiki/Universal_Disk_Format
+
 https://sites.google.com/site/udfintro/
+
 http://www.ecma-international.org/publications/files/ECMA-ST/Ecma-167.pdf
+
 http://www.osta.org/specs/pdf/udf260.pdf
 
 
